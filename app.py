@@ -99,13 +99,24 @@ def gerar_ranges_cep(df_cidade):
 # 2. Funções de Carga de Dados
 @st.cache_data
 def carregar_ceps_estado(uf):
-    # Lê a base oficial zipada do GitHub
-    caminho_arquivo = f"Base_CEPs_Estados/CEPs_{uf}.csv.gz"
-    try:
-        df_estado = pd.read_csv(caminho_arquivo, compression='gzip', sep=',', encoding='utf-8')
-        return df_estado
-    except Exception as e:
-        return pd.DataFrame()
+    # O Streamlit agora vai procurar tanto dentro da pasta quanto solto na raiz
+    caminhos_para_testar = [
+        f"Base_CEPs_Estados/CEPs_{uf}.csv.gz", 
+        f"CEPs_{uf}.csv.gz"
+    ]
+    
+    for caminho in caminhos_para_testar:
+        if os.path.exists(caminho):
+            try:
+                df_estado = pd.read_csv(caminho, compression='gzip', sep=',', encoding='utf-8')
+                return df_estado
+            except Exception as e:
+                st.error(f"Achei o arquivo, mas não consegui ler: {e}")
+                return pd.DataFrame()
+                
+    # Se ele testar os dois caminhos e não achar, ele avisa exatamente o porquê
+    st.error(f"Arquivo CEPs_{uf}.csv.gz não encontrado. Verifique se ele subiu para o GitHub.")
+    return pd.DataFrame()
 
 @st.cache_data
 def load_dados(excel_file, zip_file):

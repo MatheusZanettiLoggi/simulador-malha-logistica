@@ -85,6 +85,8 @@ def gerar_legenda(transp_presentes):
 
 # Função para gerar Ranges de CEP Formatados
 def gerar_ranges_cep(df_cidade):
+    if df_cidade.empty:
+        return pd.DataFrame()
     df_range = df_cidade.groupby(['Transportadora', 'Bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
     df_range.columns = ['Transportadora', 'Bairro', 'CEP Inicial', 'CEP Final']
     
@@ -95,6 +97,16 @@ def gerar_ranges_cep(df_cidade):
     return df_range.sort_values(['Transportadora', 'CEP Inicial'])
 
 # 2. Funções de Carga de Dados
+@st.cache_data
+def carregar_ceps_estado(uf):
+    # Lê a base oficial zipada do GitHub
+    caminho_arquivo = f"Base_CEPs_Estados/CEPs_{uf}.csv.gz"
+    try:
+        df_estado = pd.read_csv(caminho_arquivo, compression='gzip', sep=',', encoding='utf-8')
+        return df_estado
+    except Exception as e:
+        return pd.DataFrame()
+
 @st.cache_data
 def load_dados(excel_file, zip_file):
     df = pd.read_excel(excel_file)
@@ -147,6 +159,7 @@ if 'cores_transp' not in st.session_state:
     st.session_state.cores_transp = {t: cores_padrao[i % len(cores_padrao)] for i, t in enumerate(todas_transp)}
     st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
     st.session_state.cores_transp['Oculto'] = 'transparent'
+    st.session_state.cores_transp['Sem Atendimento'] = '#808080'
 
 df_vol = df_vol_raw.copy()
 df_vol['Bairro'] = df_vol['Bairro'].apply(lambda x: st.session_state.de_para_bairros.get(x, x))
@@ -225,7 +238,7 @@ def merge_geo(gdf_cid, df_agg):
 # ==========================================
 st.title(f"Planejamento de Malha: {cidade_selecionada}")
 
-aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP"])
+aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
 def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter")
@@ -319,7 +332,6 @@ with aba1:
     col_m1, col_t1 = st.columns([2, 1])
     with col_m1:
         st.markdown("##### Cenário Atual")
-        # Passa st.session_state.get('coords_bases') para desenhar as casinhas no mapa manual também
         desenhar_mapa(gdf_mapa_orig, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
@@ -336,7 +348,6 @@ with aba1:
     col_m2, col_t2 = st.columns([2, 1])
     with col_m2:
         st.markdown("##### Cenário Simulado")
-        # Passa st.session_state.get('coords_bases') para desenhar as casinhas no mapa manual também
         desenhar_mapa(gdf_mapa_sim, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
@@ -471,25 +482,69 @@ with aba2:
                 st.dataframe(gerar_tabela(df_cidade_ia), use_container_width=True, hide_index=True)
 
 # ==========================================
-# ABA 3: Exportação e Ranges de CEP
+# ABA 3: Exportação e Ranges de CEP OFICIAIS
 # ==========================================
 with aba3:
-    st.markdown("### 🗃️ Extração de Ranges de CEP por Base (Sem Sobreposição)")
+    st.markdown("### 🗃️ Extração de Ranges de CEP por Base (Base Oficial Correios)")
+    st.write("A inteligência abaixo mapeia os CEPs reais do município para as transportadoras configuradas nas simulações.")
     
-    st.markdown("#### 1. Cenário Atual (Looker)")
-    df_range_orig = gerar_ranges_cep(df_cidade_orig)
-    st.dataframe(df_range_orig, use_container_width=True, hide_index=True)
+    # 1. Cria a caixa de seleção em cascata (UF -> Cidade)
+    col_c1, col_c2 = st.columns(2)
+    lista_ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
     
-    st.markdown("#### 2. Cenário Simulado (Manual)")
-    df_range_sim = gerar_ranges_cep(df_cidade_sim)
-    st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
-    
-    if 'ia_resultado' in st.session_state:
-        st.markdown("#### 3. Cenário IA (Roteirização Inteligente)")
-        df_cidade_ia = df_cidade_orig.copy()
-        for idx, row in df_cidade_ia.iterrows():
-            if row['Bairro'] in st.session_state.ia_resultado:
-                df_cidade_ia.at[idx, 'Transportadora'] = st.session_state.ia_resultado[row['Bairro']]
+    with col_c1:
+        uf_selecionada = st.selectbox("1. Puxar Base do Estado (UF):", ["-- Selecione --"] + lista_ufs)
+        
+    if uf_selecionada != "-- Selecione --":
+        with st.spinner(f"Baixando e descompactando a malha de {uf_selecionada}..."):
+            df_estado = carregar_ceps_estado(uf_selecionada)
+            
+        if not df_estado.empty:
+            with col_c2:
+                cidades_estado = sorted(df_estado['municipio'].dropna().unique())
+                # Tenta pré-selecionar a cidade que já está no filtro geral da tela
+                idx_cidade = cidades_estado.index(cidade_selecionada.upper()) if cidade_selecionada.upper() in cidades_estado else 0
+                cidade_oficial = st.selectbox("2. Município Alvo:", cidades_estado, index=idx_cidade)
+            
+            # Filtra apenas os CEPs do município selecionado
+            df_cidade_oficial = df_estado[df_estado['municipio'] == cidade_oficial].copy()
+            st.success(f"✅ Encontrados **{len(df_cidade_oficial)} CEPs reais** registrados nos Correios para {cidade_oficial}.")
+            st.divider()
+
+            # Mapeamento Inteligente (Looker -> Correios)
+            # Limpa o nome do bairro oficial para bater com os bairros da planilha
+            df_cidade_oficial['Bairro_Limpo'] = df_cidade_oficial['bairro'].apply(limpa_texto)
+            df_cidade_oficial.rename(columns={'cep': COLUNA_CEP, 'bairro': 'Bairro'}, inplace=True)
+
+            # ---------------------------------------------------------
+            # 1. Cenário Atual (Mapeando a base original do Looker)
+            st.markdown("#### 1. Cenário Atual (Looker vs Correios)")
+            map_atual = df_cidade_orig.groupby(df_cidade_orig['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+            df_oficial_orig = df_cidade_oficial.copy()
+            df_oficial_orig['Transportadora'] = df_oficial_orig['Bairro_Limpo'].map(map_atual).fillna('Sem Atendimento')
+            
+            df_range_orig = gerar_ranges_cep(df_oficial_orig)
+            st.dataframe(df_range_orig, use_container_width=True, hide_index=True)
+            
+            # ---------------------------------------------------------
+            # 2. Cenário Simulado (Mapeando as simulações manuais)
+            st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
+            map_sim = df_cidade_sim.groupby(df_cidade_sim['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+            df_oficial_sim = df_cidade_oficial.copy()
+            df_oficial_sim['Transportadora'] = df_oficial_sim['Bairro_Limpo'].map(map_sim).fillna('Sem Atendimento')
+            
+            df_range_sim = gerar_ranges_cep(df_oficial_sim)
+            st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
+            
+            # ---------------------------------------------------------
+            # 3. Cenário IA (Mapeando o roteamento da Inteligência)
+            if 'ia_resultado' in st.session_state:
+                st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
+                map_ia = {limpa_texto(k): v for k, v in st.session_state.ia_resultado.items()}
+                df_oficial_ia = df_cidade_oficial.copy()
+                df_oficial_ia['Transportadora'] = df_oficial_ia['Bairro_Limpo'].map(map_ia).fillna('Sem Atendimento')
                 
-        df_range_ia = gerar_ranges_cep(df_cidade_ia)
-        st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
+                df_range_ia = gerar_ranges_cep(df_oficial_ia)
+                st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
+        else:
+            st.error("Falha ao carregar a base do Estado. Verifique se o arquivo .csv.gz está correto no GitHub.")

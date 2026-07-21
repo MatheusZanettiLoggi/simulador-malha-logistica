@@ -495,31 +495,111 @@ with aba2:
 # ==========================================
 # ABA 3: Exportação e Ranges de CEP OFICIAIS
 # ==========================================
+# Função para descobrir a UF automaticamente pela regra dos Correios
+def descobrir_uf_pelo_cep(cep_str):
+    cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
+    prefixo = int(cep[:2])
+    
+    if 0 <= prefixo <= 19: return "SP"
+    elif 20 <= prefixo <= 28: return "RJ"
+    elif prefixo == 29: return "ES"
+    elif 30 <= prefixo <= 39: return "MG"
+    elif 40 <= prefixo <= 48: return "BA"
+    elif prefixo == 49: return "SE"
+    elif 50 <= prefixo <= 56: return "PE"
+    elif prefixo == 57: return "AL"
+    elif prefixo == 58: return "PB"
+    elif prefixo == 59: return "RN"
+    elif 60 <= prefixo <= 63: return "CE"
+    elif prefixo == 64: return "PI"
+    elif prefixo == 65: return "MA"
+    elif 66 <= prefixo <= 68:
+        if cep.startswith('689'): return "AP"
+        return "PA"
+    elif prefixo == 69:
+        if cep.startswith('693'): return "RR"
+        if cep.startswith('699'): return "AC"
+        return "AM"
+    elif 70 <= prefixo <= 72: return "DF"
+    elif prefixo == 73:
+        if int(cep[:3]) <= 736: return "DF"
+        return "GO"
+    elif 74 <= prefixo <= 76: return "GO"
+    elif prefixo == 77: return "TO"
+    elif prefixo == 78: return "MT"
+    elif prefixo == 79: return "MS"
+    elif 80 <= prefixo <= 87: return "PR"
+    elif 88 <= prefixo <= 89: return "SC"
+    elif 90 <= prefixo <= 99: return "RS"
+    return "SP" # Fallback de segurança
+
+# ==========================================
+# ABA 3: Exportação e Ranges de CEP OFICIAIS
+# ==========================================
+# Função para descobrir a UF automaticamente pela regra dos Correios
+def descobrir_uf_pelo_cep(cep_str):
+    cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
+    prefixo = int(cep[:2])
+    
+    if 0 <= prefixo <= 19: return "SP"
+    elif 20 <= prefixo <= 28: return "RJ"
+    elif prefixo == 29: return "ES"
+    elif 30 <= prefixo <= 39: return "MG"
+    elif 40 <= prefixo <= 48: return "BA"
+    elif prefixo == 49: return "SE"
+    elif 50 <= prefixo <= 56: return "PE"
+    elif prefixo == 57: return "AL"
+    elif prefixo == 58: return "PB"
+    elif prefixo == 59: return "RN"
+    elif 60 <= prefixo <= 63: return "CE"
+    elif prefixo == 64: return "PI"
+    elif prefixo == 65: return "MA"
+    elif 66 <= prefixo <= 68:
+        if cep.startswith('689'): return "AP"
+        return "PA"
+    elif prefixo == 69:
+        if cep.startswith('693'): return "RR"
+        if cep.startswith('699'): return "AC"
+        return "AM"
+    elif 70 <= prefixo <= 72: return "DF"
+    elif prefixo == 73:
+        if int(cep[:3]) <= 736: return "DF"
+        return "GO"
+    elif 74 <= prefixo <= 76: return "GO"
+    elif prefixo == 77: return "TO"
+    elif prefixo == 78: return "MT"
+    elif prefixo == 79: return "MS"
+    elif 80 <= prefixo <= 87: return "PR"
+    elif 88 <= prefixo <= 89: return "SC"
+    elif 90 <= prefixo <= 99: return "RS"
+    return "SP" # Fallback de segurança
+
+# ==========================================
+# ABA 3: Exportação e Ranges de CEP OFICIAIS
+# ==========================================
 with aba3:
-    st.markdown("### 🗃️ Extração de Ranges de CEP por Base (Base Oficial Correios)")
-    st.write("A inteligência abaixo mapeia os CEPs reais do município para as transportadoras configuradas nas simulações.")
+    st.markdown("### 🗃️ Extração de Ranges de CEP por Base")
+    st.write("Mapeamento automático dos CEPs reais do município para as transportadoras configuradas nas simulações.")
     
-    # 1. Cria a caixa de seleção em cascata (UF -> Cidade)
-    col_c1, col_c2 = st.columns(2)
-    lista_ufs = ["AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"]
+    # 1. Inteligência para descobrir a UF automaticamente
+    # Pega o primeiro CEP válido da cidade atual na planilha do Looker
+    cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
+    uf_automatica = descobrir_uf_pelo_cep(cep_amostra)
+    cidade_oficial = cidade_selecionada.upper()
     
-    with col_c1:
-        uf_selecionada = st.selectbox("1. Puxar Base do Estado (UF):", ["-- Selecione --"] + lista_ufs)
+    st.info(f"🔍 Identificamos automaticamente que a cidade **{cidade_selecionada}** pertence ao Estado **{uf_automatica}**.")
+    
+    with st.spinner(f"Baixando e cruzando a malha oficial de {cidade_selecionada} - {uf_automatica}..."):
+        df_estado = carregar_ceps_estado(uf_automatica)
         
-    if uf_selecionada != "-- Selecione --":
-        with st.spinner(f"Baixando e descompactando a malha de {uf_selecionada}..."):
-            df_estado = carregar_ceps_estado(uf_selecionada)
-            
-        if not df_estado.empty:
-            with col_c2:
-                cidades_estado = sorted(df_estado['municipio'].dropna().unique())
-                # Tenta pré-selecionar a cidade que já está no filtro geral da tela
-                idx_cidade = cidades_estado.index(cidade_selecionada.upper()) if cidade_selecionada.upper() in cidades_estado else 0
-                cidade_oficial = st.selectbox("2. Município Alvo:", cidades_estado, index=idx_cidade)
-            
-            # Filtra apenas os CEPs do município selecionado
-            df_cidade_oficial = df_estado[df_estado['municipio'] == cidade_oficial].copy()
-            st.success(f"✅ Encontrados **{len(df_cidade_oficial)} CEPs reais** registrados nos Correios para {cidade_oficial}.")
+    if not df_estado.empty:
+        # Filtra apenas os CEPs do município selecionado
+        df_cidade_oficial = df_estado[df_estado['municipio'] == cidade_oficial].copy()
+        
+        if df_cidade_oficial.empty:
+            st.warning(f"Não encontramos CEPs registrados para '{cidade_oficial}' no e-DNE dos Correios.")
+        else:
+            st.success(f"✅ Base cruzada com sucesso! Temos **{len(df_cidade_oficial)} CEPs reais** para alocação.")
             st.divider()
 
             # Mapeamento Inteligente (Looker -> Correios)
@@ -557,5 +637,3 @@ with aba3:
                 
                 df_range_ia = gerar_ranges_cep(df_oficial_ia)
                 st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
-        else:
-            st.error("Falha ao carregar a base do Estado. Verifique se o arquivo .csv.gz está correto no GitHub.")

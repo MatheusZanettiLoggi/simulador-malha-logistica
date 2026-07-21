@@ -582,10 +582,11 @@ with aba3:
     st.write("Mapeamento automático dos CEPs reais do município para as transportadoras configuradas nas simulações.")
     
     # 1. Inteligência para descobrir a UF automaticamente
-    # Pega o primeiro CEP válido da cidade atual na planilha do Looker
     cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
     uf_automatica = descobrir_uf_pelo_cep(cep_amostra)
-    cidade_oficial = cidade_selecionada.upper()
+    
+    # Padroniza a cidade alvo em MAIÚSCULO e sem acentos para bater com o banco dos Correios
+    cidade_oficial = limpa_texto(cidade_selecionada)
     
     st.info(f"🔍 Identificamos automaticamente que a cidade **{cidade_selecionada}** pertence ao Estado **{uf_automatica}**.")
     
@@ -593,17 +594,19 @@ with aba3:
         df_estado = carregar_ceps_estado(uf_automatica)
         
     if not df_estado.empty:
-        # Filtra apenas os CEPs do município selecionado
-        df_cidade_oficial = df_estado[df_estado['municipio'] == cidade_oficial].copy()
+        # Cria uma coluna limpa no banco dos Correios para garantir o match perfeito
+        df_estado['municipio_limpo'] = df_estado['municipio'].apply(limpa_texto)
+        
+        # Filtra usando o texto padronizado
+        df_cidade_oficial = df_estado[df_estado['municipio_limpo'] == cidade_oficial].copy()
         
         if df_cidade_oficial.empty:
-            st.warning(f"Não encontramos CEPs registrados para '{cidade_oficial}' no e-DNE dos Correios.")
+            st.warning(f"Não encontramos CEPs registrados para '{cidade_selecionada}' no e-DNE dos Correios.")
         else:
             st.success(f"✅ Base cruzada com sucesso! Temos **{len(df_cidade_oficial)} CEPs reais** para alocação.")
             st.divider()
 
             # Mapeamento Inteligente (Looker -> Correios)
-            # Limpa o nome do bairro oficial para bater com os bairros da planilha
             df_cidade_oficial['Bairro_Limpo'] = df_cidade_oficial['bairro'].apply(limpa_texto)
             df_cidade_oficial.rename(columns={'cep': COLUNA_CEP, 'bairro': 'Bairro'}, inplace=True)
 
@@ -637,3 +640,5 @@ with aba3:
                 
                 df_range_ia = gerar_ranges_cep(df_oficial_ia)
                 st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
+    else:
+        st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")

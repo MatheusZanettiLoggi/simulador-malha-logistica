@@ -143,6 +143,15 @@ def load_dados(excel_file, zip_file, modo):
         st.warning(f"Coluna '{COLUNA_CEP}' não encontrada. Usando dados fictícios de CEP.")
         df[COLUNA_CEP] = '00000-000'
         
+    # LOGICA NOVA: Juntar Nome da Base + Sigla
+    col_company = 'Package Last Mile Company Name'
+    col_routing = 'Package Planned DC Routing Code'
+    if col_company in df.columns and col_routing in df.columns:
+        df[col_company] = df.apply(
+            lambda r: f"{r[col_company]} ({r[col_routing]})" if pd.notna(r[col_routing]) and str(r[col_routing]).strip() != "" else str(r[col_company]),
+            axis=1
+        )
+        
     with open("temp_mapa.zip", "wb") as f:
         f.write(zip_file.getbuffer())
     gdf = gpd.read_file('zip://temp_mapa.zip')
@@ -228,13 +237,20 @@ if 'de_para_bairros' not in st.session_state:
     else:
         st.session_state.de_para_bairros = {}
 
+# LOGICA NOVA: Correção das Cores (Garante que novas bases recebam cor automaticamente)
 if 'cores_transp' not in st.session_state:
-    cores_padrao = ['#9b59b6', '#e67e22', '#3498db', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#ff9ff3', '#00cec9', '#fdcb6e']
-    todas_transp = sorted(df_vol_raw['Transportadora'].unique())
-    st.session_state.cores_transp = {t: cores_padrao[i % len(cores_padrao)] for i, t in enumerate(todas_transp)}
-    st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
-    st.session_state.cores_transp['Oculto'] = 'transparent'
-    st.session_state.cores_transp['Sem Atendimento'] = '#808080'
+    st.session_state.cores_transp = {}
+    
+cores_padrao = ['#9b59b6', '#e67e22', '#3498db', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#ff9ff3', '#00cec9', '#fdcb6e']
+todas_transp = sorted(df_vol_raw['Transportadora'].unique())
+
+for i, transp in enumerate(todas_transp):
+    if transp not in st.session_state.cores_transp:
+        st.session_state.cores_transp[transp] = cores_padrao[i % len(cores_padrao)]
+
+st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
+st.session_state.cores_transp['Oculto'] = 'transparent'
+st.session_state.cores_transp['Sem Atendimento'] = '#808080'
 
 df_vol = df_vol_raw.copy()
 df_vol['Bairro'] = df_vol['Bairro'].apply(lambda x: st.session_state.de_para_bairros.get(x, x))
@@ -326,7 +342,6 @@ st.title(f"Planejamento de Malha: {titulo_app}")
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
 def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
-    # Trava de segurança inserida para evitar erros do Folium se o mapa estiver vazio
     if gdf_mapa.empty:
         st.warning("⚠️ Os polígonos não foram encontrados no mapa carregado.")
         return
@@ -612,7 +627,6 @@ with aba3:
 
             df_cidade_oficial.rename(columns={'cep': COLUNA_CEP, 'bairro': 'Bairro_Correios', 'municipio': 'Municipio_Correios'}, inplace=True)
             
-            # Ajuste dinâmico para gerar os Ranges de acordo com a granularidade
             if is_regional:
                 df_cidade_oficial['Bairro'] = df_cidade_oficial['Municipio_Correios']
             else:

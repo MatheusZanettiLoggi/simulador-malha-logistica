@@ -143,7 +143,6 @@ def load_dados(excel_file, zip_file, modo):
         st.warning(f"Coluna '{COLUNA_CEP}' não encontrada. Usando dados fictícios de CEP.")
         df[COLUNA_CEP] = '00000-000'
         
-    # LOGICA NOVA: Juntar Nome da Base + Sigla
     col_company = 'Package Last Mile Company Name'
     col_routing = 'Package Planned DC Routing Code'
     if col_company in df.columns and col_routing in df.columns:
@@ -237,7 +236,6 @@ if 'de_para_bairros' not in st.session_state:
     else:
         st.session_state.de_para_bairros = {}
 
-# LOGICA NOVA: Correção das Cores (Garante que novas bases recebam cor automaticamente)
 if 'cores_transp' not in st.session_state:
     st.session_state.cores_transp = {}
     
@@ -418,8 +416,12 @@ with aba1:
             st.rerun()
 
     df_mapa_sim_agg = prepara_mapa(df_cidade_sim)
+    
+    # MODIFICAÇÃO: O Cenário Atual continua mostrando os alertas de sobreposição
     df_mapa_orig_agg['Transportadora_Mapa'] = df_mapa_orig_agg.apply(lambda row: 'Múltiplas Bases' if row['Qtd_Bases'] > 1 else row['Parceiros'], axis=1)
-    df_mapa_sim_agg['Transportadora_Mapa'] = df_mapa_sim_agg.apply(lambda row: 'Múltiplas Bases' if row['Qtd_Bases'] > 1 else row['Parceiros'], axis=1)
+    
+    # MODIFICAÇÃO: O Cenário Simulado assume a primeira transportadora limpa (ignora alertas)
+    df_mapa_sim_agg['Transportadora_Mapa'] = df_mapa_sim_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
 
     gdf_mapa_orig = merge_geo(gdf_cidade, df_mapa_orig_agg)
     gdf_mapa_sim = merge_geo(gdf_cidade, df_mapa_sim_agg)
@@ -458,6 +460,7 @@ with aba1:
         
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar]
+        # A legenda de 'Múltiplas Bases' não vai mais aparecer no Simulado
         if 'Múltiplas Bases' in gdf_mapa_sim['Transportadora_Mapa'].values: t_sim_legenda.append('Múltiplas Bases')
         t_sim_legenda.append('Sem Dados / Divergência')
         gerar_legenda(t_sim_legenda)
@@ -523,9 +526,13 @@ with aba2:
                     for _, row in gdf_cidade.iterrows():
                         if pd.notnull(row['geometry']):
                             c_y, c_x = row['geometry'].centroid.y, row['geometry'].centroid.x
-                            vol_bairro = df_cidade_orig[df_cidade_orig['Join_Bairro'] == row['Join_Bairro']]['Volume'].sum()
+                            # Puxa as métricas cruzando pelo Join_Bairro para evitar bug de acentuação/case
+                            df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == row['Join_Bairro']]
+                            vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
-                                bairros_info.append({'Bairro': row['NM_BAIRRO_STR'], 'Join_Bairro': row['Join_Bairro'], 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x})
+                                # Captura o nome original da planilha Looker para os mapeamentos baterem perfeitamente
+                                bairro_original = df_match['Bairro'].iloc[0]
+                                bairros_info.append({'Bairro': bairro_original, 'Join_Bairro': row['Join_Bairro'], 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x})
                     
                     alocacao_ia = {}
                     for b_info in bairros_info:
@@ -575,7 +582,10 @@ with aba2:
                     st.session_state.ia_resultado[row['Bairro']] = bases_ativas[0]
                     
             df_mapa_ia_agg = prepara_mapa(df_cidade_ia)
-            df_mapa_ia_agg['Transportadora_Mapa'] = df_mapa_ia_agg.apply(lambda row: 'Múltiplas Bases' if row['Qtd_Bases'] > 1 else row['Parceiros'], axis=1)
+            
+            # MODIFICAÇÃO: O Cenário IA também ignora alertas visuais de sobreposição
+            df_mapa_ia_agg['Transportadora_Mapa'] = df_mapa_ia_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
+            
             gdf_mapa_ia = merge_geo(gdf_cidade, df_mapa_ia_agg)
             
             col_ia_m, col_ia_t = st.columns([2, 1])

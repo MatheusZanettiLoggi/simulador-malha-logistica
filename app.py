@@ -160,7 +160,6 @@ def load_dados(excel_file, zip_file, modo):
         gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
     else:
-        # Modo Regional: A cidade vira o "bairro" para reaproveitar a estrutura do App[cite: 1]
         df_vol = df.groupby(
             ['Package Destination City', 'Package Last Mile Company Name', COLUNA_CEP]
         )['Package # Packages'].sum().reset_index()
@@ -249,7 +248,7 @@ cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" 
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
 df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
-gdf_cidade = gdf[gdf['Join_Cidade'] == cidade_selecionada.upper()]
+gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
 bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
 lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
@@ -303,24 +302,21 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m['Transportadora_Mapa'] = gdf_m['Transportadora_Mapa'].fillna('Sem Dados / Divergência')
     gdf_m['Volume'] = gdf_m['Volume'].fillna(0)
     
-    # Se for regional, o nome da cidade está em NM_BAIRRO_STR
     gdf_m['Bairro'] = gdf_m['Bairro'].fillna(gdf_m['NM_BAIRRO_STR'])
     gdf_m['Parceiros'] = gdf_m['Parceiros'].fillna('Sem Dados')
     
-    # Forçamos o tipo para booleano (bool) para o Pandas não se perder
     gdf_m['Visivel'] = gdf_m['Parceiros'].apply(
         lambda x: True if x == 'Sem Dados' else any(p in transp_selecionadas_sidebar for p in x.split(' + '))
     ).astype(bool)
     
     if bairros_selecionados: 
-        # Usamos == False para evitar o erro do PyArrow
         gdf_m.loc[gdf_m['Bairro'].isin(bairros_selecionados) == False, 'Visivel'] = False
         
-    # A linha que dava erro corrigida (Trocamos o ~ por == False)
     mask = (gdf_m['Visivel'] == False) & (gdf_m['Transportadora_Mapa'] != 'Sem Dados / Divergência')
     gdf_m.loc[mask, 'Transportadora_Mapa'] = 'Oculto'
     
     return gdf_m
+
 # ==========================================
 # ESTRUTURA VISUAL: ABAS
 # ==========================================
@@ -330,6 +326,11 @@ st.title(f"Planejamento de Malha: {titulo_app}")
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
 def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
+    # Trava de segurança inserida para evitar erros do Folium se o mapa estiver vazio
+    if gdf_mapa.empty:
+        st.warning("⚠️ Os polígonos não foram encontrados no mapa carregado.")
+        return
+
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter")
     def style_fn(feature):
         transp = feature['properties']['Transportadora_Mapa']

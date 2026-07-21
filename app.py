@@ -302,13 +302,25 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m = gdf_cid.merge(df_agg, on='Join_Bairro', how='left')
     gdf_m['Transportadora_Mapa'] = gdf_m['Transportadora_Mapa'].fillna('Sem Dados / Divergência')
     gdf_m['Volume'] = gdf_m['Volume'].fillna(0)
+    
+    # Se for regional, o nome da cidade está em NM_BAIRRO_STR
     gdf_m['Bairro'] = gdf_m['Bairro'].fillna(gdf_m['NM_BAIRRO_STR'])
     gdf_m['Parceiros'] = gdf_m['Parceiros'].fillna('Sem Dados')
-    gdf_m['Visivel'] = gdf_m['Parceiros'].apply(lambda x: True if x == 'Sem Dados' else any(p in transp_selecionadas_sidebar for p in x.split(' + ')))
-    if bairros_selecionados: gdf_m.loc[~gdf_m['Bairro'].isin(bairros_selecionados), 'Visivel'] = False
-    gdf_m.loc[~gdf_m['Visivel'] & (gdf_m['Transportadora_Mapa'] != 'Sem Dados / Divergência'), 'Transportadora_Mapa'] = 'Oculto'
+    
+    # Forçamos o tipo para booleano (bool) para o Pandas não se perder
+    gdf_m['Visivel'] = gdf_m['Parceiros'].apply(
+        lambda x: True if x == 'Sem Dados' else any(p in transp_selecionadas_sidebar for p in x.split(' + '))
+    ).astype(bool)
+    
+    if bairros_selecionados: 
+        # Usamos == False para evitar o erro do PyArrow
+        gdf_m.loc[gdf_m['Bairro'].isin(bairros_selecionados) == False, 'Visivel'] = False
+        
+    # A linha que dava erro corrigida (Trocamos o ~ por == False)
+    mask = (gdf_m['Visivel'] == False) & (gdf_m['Transportadora_Mapa'] != 'Sem Dados / Divergência')
+    gdf_m.loc[mask, 'Transportadora_Mapa'] = 'Oculto'
+    
     return gdf_m
-
 # ==========================================
 # ESTRUTURA VISUAL: ABAS
 # ==========================================

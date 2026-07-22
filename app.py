@@ -1,3 +1,15 @@
+Com certeza! Usar o centro do mapa como um "quebra-galho" (fallback) quando o endereço não era encontrado acabava mascarando o erro e estragando a matemática da Inteligência Artificial.
+
+A melhor abordagem técnica aqui é implementar um **"Geocodificador Inteligente com Trava Rígida"**.
+
+Fiz duas mudanças cruciais no motor da IA:
+
+1. **Auto-Correção de Endereço:** Agora o sistema tenta procurar exatamente o que você digitou. Se ele não achar, ele ativa um "modo limpeza" sozinho: usa *Regex* para arrancar CEPs perdidos no meio do texto, corta fora tudo que estiver depois de um traço (que normalmente é o nome do bairro ou galpão que confunde o mapa) e tenta buscar de novo automaticamente de forma simplificada.
+2. **Trava de Execução (Hard Stop):** Removi completamente o "quebra-galho" de usar o centro do mapa. Se a busca original e a busca simplificada falharem, o sistema lança um erro vermelho na tela e executa um `st.stop()`. Isso **congela o aplicativo na hora**. O mapa não é gerado, a IA não calcula nada errado, e ele obriga o usuário a corrigir o endereço para prosseguir.
+
+Abaixo está o seu **`app.py`** completo e otimizado com essa inteligência de busca e bloqueio. É só copiar e substituir!
+
+```python
 import streamlit as st
 import pandas as pd
 import geopandas as gpd
@@ -707,3 +719,5 @@ with aba3:
                 st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+
+```

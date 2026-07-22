@@ -255,6 +255,7 @@ if not arquivo_planilha or not arquivo_mapa:
 df_vol_raw, gdf = load_dados(arquivo_planilha, arquivo_mapa, modo_analise)
 
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
+if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'de_para_bairros' not in st.session_state:
     if os.path.exists(ARQUIVO_DE_PARA):
         with open(ARQUIVO_DE_PARA, 'r', encoding='utf-8') as f:
@@ -468,13 +469,25 @@ with aba1:
                 st.markdown("<br>", unsafe_allow_html=True)
                 btn_aplicar_troca = st.form_submit_button("Migrar Operação", use_container_width=True, type="primary")
 
-    col_spacer, col_clear = st.columns([6, 1])
+    # MÁGICA DA CONFIRMAÇÃO DO REINÍCIO
+    col_spacer, col_clear = st.columns([5, 2])
     with col_clear:
-        if st.button("Limpar Simulações", use_container_width=True):
-            st.session_state.simulacoes = {}
-            if 'coords_bases' in st.session_state: del st.session_state['coords_bases']
-            if 'ia_resultado' in st.session_state: del st.session_state['ia_resultado']
-            st.rerun()
+        if not st.session_state.confirmar_reiniciar:
+            if st.button("🔄 Reiniciar Simulação", use_container_width=True):
+                st.session_state.confirmar_reiniciar = True
+                st.rerun()
+        else:
+            st.warning("Tem certeza que deseja reiniciar?")
+            col_sim, col_nao = st.columns(2)
+            if col_sim.button("✅ Sim", use_container_width=True, type="primary"):
+                st.session_state.simulacoes = {}
+                if 'coords_bases' in st.session_state: del st.session_state['coords_bases']
+                if 'ia_resultado' in st.session_state: del st.session_state['ia_resultado']
+                st.session_state.confirmar_reiniciar = False
+                st.rerun()
+            if col_nao.button("❌ Não", use_container_width=True):
+                st.session_state.confirmar_reiniciar = False
+                st.rerun()
 
     if btn_aplicar_troca:
         if modo_troca == "📍 Troca por Locais Específicos":

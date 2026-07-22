@@ -33,14 +33,6 @@ def formatar_cep(cep):
         return f"{cep_limpo[:5]}-{cep_limpo[5:]}"
     return cep
 
-def simplificar_endereco(endereco, cidade):
-    end = str(endereco).strip()
-    end = end.replace('Av.', 'Avenida').replace('R.', 'Rua')
-    if cidade != 'Visão Regional (Estado Completo)':
-        if cidade.lower() not in end.lower():
-            end = f"{end}, {cidade}"
-    return end
-
 def misturar_cores(lista_hex):
     r, g, b = 0, 0, 0
     cores_validas = 0
@@ -475,14 +467,14 @@ with aba1:
 # ==========================================
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
-    st.info("A IA formatará os endereços, encontrará as coordenadas e alocará as regiões baseadas na proximidade para atingir a meta. **Não haverá sobreposição.**")
+    st.info("A IA encontrará as coordenadas e alocará as regiões baseadas na proximidade para atingir a meta. **Não haverá sobreposição.**")
     
     bases_ativas = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
     if bases_ativas:
         with st.form("form_ia_config"):
             st.markdown("##### ⚙️ Configuração das Metas")
-            st.caption("Ajuste a proporção desejada nas barras (%) abaixo. A última base fechará os 100% automaticamente.")
+            st.caption("Ajuste a proporção desejada nas barras (%) abaixo. A última base fechará os 100% automaticamente (Lógica em Cascata).")
             
             col_ia1, col_ia2 = st.columns(2)
             target_vols = {}
@@ -493,8 +485,13 @@ with aba2:
                 with col_ia1 if i % 2 == 0 else col_ia2:
                     st.markdown(f"**{base}**")
                     
-                    def_end = f"Centro, {cidade_selecionada}" if cidade_selecionada != 'Visão Regional (Estado Completo)' else ""
-                    enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=def_end, key=f"end_{base}")
+                    enderecos[base] = st.text_input(
+                        f"Endereço da Sede ({base})", 
+                        value="", 
+                        placeholder="Ex: Avenida Paulista, 1000, São Paulo - SP",
+                        help="Não cole o texto do Looker inteiro. Digite apenas Rua, Número, Cidade e UF para o satélite não se perder.",
+                        key=f"end_{base}"
+                    )
                     
                     if i < len(bases_ativas) - 1:
                         val = st.slider(
@@ -527,34 +524,33 @@ with aba2:
                             erros_geo.append((base, "Endereço em branco"))
                             continue
                             
-                        st.caption(f"📍 *Buscando original:* {end}")
-                        location = geolocator.geocode(f"{end}, Brasil", timeout=15)
+                        # Tenta encontrar no satélite exatamente o que o usuário digitou
+                        st.caption(f"📍 *Buscando:* {end}")
                         
-                        if not location:
-                            end_limpo = re.sub(r'\b\d{5}-?\d{3}\b', '', end)
-                            if '-' in end_limpo:
-                                end_limpo = end_limpo.split('-')[0].strip()
-                                
-                            if cidade_selecionada != 'Visão Regional (Estado Completo)' and cidade_selecionada.lower() not in end_limpo.lower():
-                                end_limpo = f"{end_limpo}, {cidade_selecionada}"
-                                
-                            st.caption(f"♻️ *Buscando simplificado:* {end_limpo}")
-                            location = geolocator.geocode(f"{end_limpo}, Brasil", timeout=15)
+                        location = geolocator.geocode(end.strip(), timeout=15)
+                        
+                        # Se falhou e o usuário esqueceu o país, tenta adicionar "Brasil" discretamente
+                        if not location and "brasil" not in end.lower():
+                            location = geolocator.geocode(f"{end.strip()}, Brasil", timeout=15)
                             
                         if location: 
                             coords_bases[base] = (location.latitude, location.longitude)
                         else: 
+                            # TRAVA DE EMERGÊNCIA: Guarda o erro para exibir e matar o processo
                             erros_geo.append((base, end))
                     
+                    # 🔴 BLOQUEIO RÍGIDO SE O MAPA FALHAR
                     if erros_geo:
                         for err in erros_geo:
-                            st.error(f"❌ **Base {err[0]}:** Não consegui encontrar no mapa as coordenadas para o endereço abaixo, mesmo tentando simplificá-lo.\n\n**Você digitou:** '{err[1]}'\n\n💡 **DICA:** O satélite se confunde com nomes de galpões, bairros extras ou traços. Tente usar apenas: **'Rua, Número, Cidade - UF'** (Ex: *Avenida Paulista, 1000, São Paulo - SP*).")
-                        st.stop()
+                            st.error(f"❌ **Base {err[0]}:** Não foi possível encontrar a coordenada exata para o endereço ('{err[1]}').")
+                        st.info("💡 **DICA:** Não copie o endereço com barras, nomes de galpão ou traços do Looker. Digite de forma limpa: **Rua, Número, Cidade - UF**.")
+                        st.stop() # Mata a simulação antes que ela preencha o mapa com erros
                     
                     total_volume_cidade = df_cidade_orig['Volume'].sum()
                     volume_alvo = {b: total_volume_cidade * (pct/100) for b, pct in target_vols.items()}
                     volume_atual = {b: 0 for b in bases_ativas}
                     
+                    # LOGICA BLINDADA DE NOMES: Garante que Bairros/Cidades não se percam pelo nome da planilha
                     bairros_unicos = {}
                     for _, row in gdf_cidade.iterrows():
                         jb = row['Join_Bairro']
@@ -563,11 +559,10 @@ with aba2:
                             df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == jb]
                             vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
-                                bairro_original = df_match['Bairro'].iloc[0]
-                                bairros_unicos[jb] = {'Bairro': bairro_original, 'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
+                                bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())
-                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True)
+                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True) # Ordena pelas maiores cidades
 
                     alocacao_ia = {}
                     for b_info in bairros_info:
@@ -575,17 +570,24 @@ with aba2:
                         bases_ordenadas = sorted(distancias.keys(), key=lambda k: distancias[k])
                         
                         alocada = False
+                        base_escolhida = bases_ordenadas[0] # Padrão para a mais próxima
+                        
                         for base_proxima in bases_ordenadas:
                             if volume_atual[base_proxima] + b_info['Vol'] <= volume_alvo[base_proxima] * 1.20: 
-                                alocacao_ia[b_info['Bairro']] = base_proxima
+                                base_escolhida = base_proxima
                                 volume_atual[base_proxima] += b_info['Vol']
                                 alocada = True
                                 break
                                 
                         if not alocada:
-                            base_mais_vazia = max(bases_ativas, key=lambda b: volume_alvo[b] - volume_atual[b])
-                            alocacao_ia[b_info['Bairro']] = base_mais_vazia
-                            volume_atual[base_mais_vazia] += b_info['Vol']
+                            # Se a cidade é muito grande e não cabe na mais próxima, força para a que tem a maior meta sobrando
+                            base_escolhida = max(bases_ativas, key=lambda b: volume_alvo[b] - volume_atual[b])
+                            volume_atual[base_escolhida] += b_info['Vol']
+                            
+                        # Distribui a cor para TODAS as variações de nome que aquela cidade tiver na planilha!
+                        bairros_variacoes = df_cidade_orig[df_cidade_orig['Join_Bairro'] == b_info['Join_Bairro']]['Bairro'].unique()
+                        for bv in bairros_variacoes:
+                            alocacao_ia[bv] = base_escolhida
 
                     st.session_state.ia_resultado = alocacao_ia
                     st.session_state.coords_bases = coords_bases
@@ -608,6 +610,7 @@ with aba2:
 
             df_cidade_ia = df_cidade_orig.copy()
             for idx, row in df_cidade_ia.iterrows():
+                # A chave agora baterá 100% com o Bairro original da planilha, zerando o risco de bugar a %
                 if row['Bairro'] in st.session_state.ia_resultado:
                     df_cidade_ia.at[idx, 'Transportadora'] = st.session_state.ia_resultado[row['Bairro']]
                 else:

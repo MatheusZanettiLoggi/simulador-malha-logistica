@@ -98,14 +98,10 @@ def gerar_ranges_cep(df_cidade):
 # ==========================================
 # FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
 # ==========================================
-
-# NOVO: Função de Busca com Memória (Impede o Erro 429)
 @st.cache_data(show_spinner=False)
 def buscar_coordenadas(endereco_busca):
-    # O Nominatim exige no máximo 1 requisição por segundo. O sleep garante isso.
     time.sleep(1.5) 
     try:
-        # User_agent personalizado para evitar bloqueios genéricos
         geolocator = Nominatim(user_agent="simulador_malha_logistica_v3")
         location = geolocator.geocode(endereco_busca, timeout=15)
         if location:
@@ -279,9 +275,17 @@ st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
 st.session_state.cores_transp['Oculto'] = 'transparent'
 st.session_state.cores_transp['Sem Atendimento'] = '#808080'
 
+# ==========================================
+# TRATAMENTO DE DADOS E PADRONIZAÇÃO DE NOMES
+# ==========================================
 df_vol = df_vol_raw.copy()
 df_vol['Bairro'] = df_vol['Bairro'].apply(lambda x: st.session_state.de_para_bairros.get(x, x))
 df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
+
+# MAGICA DE PADRONIZAÇÃO: Força o Title Case e junta todas as variações da mesma cidade
+df_vol['Bairro'] = df_vol['Bairro'].astype(str).str.title()
+df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x.mode()[0] if not x.empty else x)
+
 df_vol = df_vol.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Transportadora', COLUNA_CEP])['Volume'].sum().reset_index()
 
 st.sidebar.markdown("---")
@@ -415,37 +419,41 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 # ==========================================
 with aba1:
     st.markdown("### 🔄 Simulador de Troca Manual")
-    col_s1, col_s2, col_s3, col_s4 = st.columns([3, 2, 1, 1])
     
-    with col_s1:
-        bairros_sim = st.multiselect("1. Selecione a(s) Região(ões)", sorted(df_cidade_orig['Bairro'].unique()))
-        df_mapa_orig_agg = prepara_mapa(df_cidade_orig)
-        if len(bairros_sim) == 1:
-            transp_atual = df_mapa_orig_agg[df_mapa_orig_agg['Bairro'] == bairros_sim[0]]['Parceiros'].iloc[0] if not df_mapa_orig_agg[df_mapa_orig_agg['Bairro'] == bairros_sim[0]].empty else "Nenhuma"
-            st.caption(f"*Atendido atualmente por:* **{transp_atual}**")
-        elif len(bairros_sim) > 1:
-            st.caption(f"*{len(bairros_sim)} locais selecionados*")
+    # MODIFICAÇÃO: Modo Formulário impede o recálculo do mapa a cada nova cidade selecionada
+    with st.form("form_troca_manual"):
+        col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
+        
+        with col_s1:
+            bairros_sim = st.multiselect("1. Selecione a(s) Região(ões)", sorted(df_cidade_orig['Bairro'].unique()))
+        
+        with col_s2:
+            nova_transp = st.selectbox("2. Para a Transportadora:", sorted(df_vol['Transportadora'].unique()))
+            
+        with col_s3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_aplicar_troca = st.form_submit_button("Aplicar Troca", use_container_width=True, type="primary")
 
-    with col_s2:
-        nova_transp = st.selectbox("2. Para a Transportadora:", sorted(df_vol['Transportadora'].unique()))
-    with col_s3:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("Aplicar Troca", use_container_width=True, type="primary"):
-            if bairros_sim:
-                for b in bairros_sim:
-                    st.session_state.simulacoes[b] = nova_transp
-                st.rerun()
-            else:
-                st.warning("Selecione um ou mais locais!")
-    with col_s4:
-        st.markdown("<br>", unsafe_allow_html=True)
+    # Botão de limpar mantido fora do formulário para ação independente
+    col_spacer, col_clear = st.columns([6, 1])
+    with col_clear:
         if st.button("Limpar Simulações", use_container_width=True):
             st.session_state.simulacoes = {}
             if 'coords_bases' in st.session_state: del st.session_state['coords_bases']
             if 'ia_resultado' in st.session_state: del st.session_state['ia_resultado']
             st.rerun()
 
+    # O código só entra aqui após o usuário clicar em "Aplicar Troca"
+    if btn_aplicar_troca:
+        if bairros_sim:
+            for b in bairros_sim:
+                st.session_state.simulacoes[b] = nova_transp
+            st.rerun()
+        else:
+            st.warning("Selecione um ou mais locais na lista acima antes de aplicar!")
+
     df_mapa_sim_agg = prepara_mapa(df_cidade_sim)
+    df_mapa_orig_agg = prepara_mapa(df_cidade_orig)
     
     df_mapa_orig_agg['Transportadora_Mapa'] = df_mapa_orig_agg.apply(lambda row: 'Múltiplas Bases' if row['Qtd_Bases'] > 1 else row['Parceiros'], axis=1)
     df_mapa_sim_agg['Transportadora_Mapa'] = df_mapa_sim_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
@@ -563,7 +571,6 @@ with aba2:
                             
                         st.caption(f"📍 *Buscando:* {end}")
                         
-                        # Função com memória cache que evita o erro 429
                         coords = buscar_coordenadas(end.strip())
                         
                         if not coords and "brasil" not in end.lower():
@@ -592,6 +599,7 @@ with aba2:
                             df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == jb]
                             vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
+                                bairro_original = df_match['Bairro'].iloc[0]
                                 bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())

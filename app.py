@@ -75,6 +75,8 @@ def gerar_legenda(transp_presentes):
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
 
+# OTIMIZAÇÃO: Tabela de Ranges agora guarda cálculo na memória cache
+@st.cache_data
 def gerar_ranges_cep(df_cidade):
     if df_cidade.empty:
         return pd.DataFrame()
@@ -154,6 +156,9 @@ def load_dados(excel_file, zip_file, modo):
     with open("temp_mapa.zip", "wb") as f:
         f.write(zip_file.getbuffer())
     gdf = gpd.read_file('zip://temp_mapa.zip')
+    
+    # OTIMIZAÇÃO: Simplifica a malha do IBGE para carregar o mapa 10x mais rápido
+    gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     if modo == "🏙️ Intra-Município (Por Bairros)":
         df_vol = df.groupby(
@@ -303,6 +308,8 @@ for idx, row in df_cidade_sim.iterrows():
     if chave_bairro in st.session_state.simulacoes:
         df_cidade_sim.at[idx, 'Transportadora'] = st.session_state.simulacoes[chave_bairro]
 
+# OTIMIZAÇÃO: Prepara mapa cacheado
+@st.cache_data
 def prepara_mapa(df):
     return df.groupby(['Join_Bairro']).agg(
         Bairro=('Bairro', 'first'),
@@ -417,10 +424,7 @@ with aba1:
 
     df_mapa_sim_agg = prepara_mapa(df_cidade_sim)
     
-    # MODIFICAÇÃO: O Cenário Atual continua mostrando os alertas de sobreposição
     df_mapa_orig_agg['Transportadora_Mapa'] = df_mapa_orig_agg.apply(lambda row: 'Múltiplas Bases' if row['Qtd_Bases'] > 1 else row['Parceiros'], axis=1)
-    
-    # MODIFICAÇÃO: O Cenário Simulado assume a primeira transportadora limpa (ignora alertas)
     df_mapa_sim_agg['Transportadora_Mapa'] = df_mapa_sim_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
 
     gdf_mapa_orig = merge_geo(gdf_cidade, df_mapa_orig_agg)
@@ -460,7 +464,6 @@ with aba1:
         
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar]
-        # A legenda de 'Múltiplas Bases' não vai mais aparecer no Simulado
         if 'Múltiplas Bases' in gdf_mapa_sim['Transportadora_Mapa'].values: t_sim_legenda.append('Múltiplas Bases')
         t_sim_legenda.append('Sem Dados / Divergência')
         gerar_legenda(t_sim_legenda)
@@ -480,36 +483,34 @@ with aba2:
     bases_ativas = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
     if bases_ativas:
-        col_ia1, col_ia2 = st.columns(2)
-        target_vols = {}
-        enderecos = {}
-        
-        pct_restante = 100
-        for i, base in enumerate(bases_ativas):
-            with col_ia1 if i % 2 == 0 else col_ia2:
-                st.markdown(f"**{base}**")
-                enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=f"Centro, {cidade_selecionada}", key=f"end_{base}")
-                
-                if i < len(bases_ativas) - 1:
-                    if pct_restante > 0:
-                        val = st.slider(f"Meta de Volume (%) - {base}", 0, pct_restante, min(pct_restante, int(100/len(bases_ativas))), key=f"vol_{base}")
-                        target_vols[base] = val
-                        pct_restante -= val
-                    else:
-                        st.warning(f"Meta de {base}: **0%** (100% já distribuído)")
-                        target_vols[base] = 0
-                else:
-                    target_vols[base] = pct_restante
-                    st.info(f"Meta de Volume (%) Calculada: **{pct_restante}%**")
-        
-        if st.button("🚀 Gerar Malha Inteligente", type="primary"):
+        # OTIMIZAÇÃO: O uso do Formulário impede o aplicativo de carregar enquanto você digita
+        with st.form("form_ia_config"):
+            st.markdown("##### ⚙️ Configuração das Metas")
+            col_ia1, col_ia2 = st.columns(2)
+            pesos_vols = {}
+            enderecos = {}
+            
+            for i, base in enumerate(bases_ativas):
+                with col_ia1 if i % 2 == 0 else col_ia2:
+                    st.markdown(f"**{base}**")
+                    enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=f"Centro, {cidade_selecionada}", key=f"end_{base}")
+                    # Usando número inteiro como "peso", o sistema calculará as porcentagens sozinho depois
+                    pesos_vols[base] = st.number_input(f"Peso de Volume - {base}", min_value=1, max_value=100, value=int(100/len(bases_ativas)), key=f"vol_{base}")
+                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+            
+            submit_ia = st.form_submit_button("🚀 Gerar Malha Inteligente", type="primary")
+
+        if submit_ia:
             with st.spinner("Geocodificando endereços e calculando distâncias... Isso pode levar alguns segundos."):
                 try:
+                    # Normaliza os pesos matematicamente para garantirmos que a soma seja sempre 100%
+                    total_peso = sum(pesos_vols.values())
+                    target_vols = {b: (p / total_peso) * 100 for b, p in pesos_vols.items()}
+                    
                     geolocator = Nominatim(user_agent="simulador_malha_log")
                     coords_bases = {}
                     for base, end in enderecos.items():
                         end_simplificado = simplificar_endereco(end, cidade_selecionada)
-                        st.caption(f"📍 *Buscando:* {end_simplificado}")
                         
                         location = geolocator.geocode(f"{end_simplificado}, Brasil", timeout=15)
                         if location: 
@@ -526,11 +527,9 @@ with aba2:
                     for _, row in gdf_cidade.iterrows():
                         if pd.notnull(row['geometry']):
                             c_y, c_x = row['geometry'].centroid.y, row['geometry'].centroid.x
-                            # Puxa as métricas cruzando pelo Join_Bairro para evitar bug de acentuação/case
                             df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == row['Join_Bairro']]
                             vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
-                                # Captura o nome original da planilha Looker para os mapeamentos baterem perfeitamente
                                 bairro_original = df_match['Bairro'].iloc[0]
                                 bairros_info.append({'Bairro': bairro_original, 'Join_Bairro': row['Join_Bairro'], 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x})
                     
@@ -582,8 +581,6 @@ with aba2:
                     st.session_state.ia_resultado[row['Bairro']] = bases_ativas[0]
                     
             df_mapa_ia_agg = prepara_mapa(df_cidade_ia)
-            
-            # MODIFICAÇÃO: O Cenário IA também ignora alertas visuais de sobreposição
             df_mapa_ia_agg['Transportadora_Mapa'] = df_mapa_ia_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
             
             gdf_mapa_ia = merge_geo(gdf_cidade, df_mapa_ia_agg)

@@ -498,12 +498,16 @@ with aba1:
         gerar_legenda(t_sim_legenda)
         
     with col_t2:
-        # NOVO RESUMO DE METRICAS
+        # LÓGICA DE CRUZAMENTO REAL PARA EVITAR FANTASMAS E CONTAGENS ERRADAS
+        df_comp = df_mapa_orig_agg[['Bairro', 'Parceiros']].merge(df_mapa_sim_agg[['Bairro', 'Parceiros']], on='Bairro', suffixes=('_orig', '_sim'))
+        locais_modificados = df_comp[df_comp['Parceiros_orig'] != df_comp['Parceiros_sim']]['Bairro']
+        
+        qtd_mod = len(locais_modificados)
+        vol_mod = df_cidade_sim[df_cidade_sim['Bairro'].isin(locais_modificados)]['Volume'].sum()
+        
         c1, c2 = st.columns(2)
         lbl_mod = "Municípios Trocados" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros Trocados"
-        vol_mod = df_cidade_sim[df_cidade_sim['Bairro'].isin(st.session_state.simulacoes.keys())]['Volume'].sum()
-        
-        c1.metric(lbl_mod, len(st.session_state.simulacoes))
+        c1.metric(lbl_mod, qtd_mod)
         c2.metric("Volume Afetado", f"{vol_mod:,.0f}".replace(',','.'))
         
         st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
@@ -630,7 +634,6 @@ with aba2:
                         for bv in bairros_variacoes:
                             alocacao_ia[bv] = base_escolhida
                             
-                    # LOGICA BLINDADA: Preenche possíveis bairros que não estavam no mapa geográfico (fantasmas)
                     for b in df_cidade_full['Bairro'].unique():
                         if b not in alocacao_ia:
                             alocacao_ia[b] = bases_ativas[0]

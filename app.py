@@ -216,6 +216,7 @@ modo_analise = st.sidebar.radio(
 )
 
 lbl_local = "Município" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
+lbl_locais = "Municípios" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
 st.sidebar.divider()
 st.sidebar.title("📁 Importação de Dados")
@@ -480,7 +481,21 @@ with aba1:
         gerar_legenda(t_orig_legenda)
         
     with col_t1:
-        st.metric("Pacotes (Atual)", f"{df_cidade_orig['Volume'].sum():,.0f}".replace(',','.'))
+        st.metric("📦 Pacotes (Atual)", f"{df_cidade_orig['Volume'].sum():,.0f}".replace(',','.'))
+        
+        # --- NOVA INFORMAÇÃO DE ABRANGÊNCIA (ATUAL) ---
+        st.markdown(f"**Abrangência ({lbl_locais}):**")
+        for base, qtd in df_cidade_orig.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
+            st.write(f"- {base}: **{qtd}**")
+            
+        locais_comp_orig = df_mapa_orig_agg[df_mapa_orig_agg['Qtd_Bases'] > 1].shape[0]
+        if locais_comp_orig > 0:
+            st.write(f"- 🔴 Compartilhados (Sobreposição): **{locais_comp_orig}**")
+        else:
+            st.write(f"- 🟢 Compartilhados: **0**")
+        st.markdown("<br>", unsafe_allow_html=True)
+        # ----------------------------------------------
+        
         st.dataframe(gerar_tabela(df_cidade_orig), use_container_width=True, hide_index=True)
         with st.expander(f"📊 Ver Volume por {lbl_local}"):
             st.dataframe(gerar_tabela_detalhada(df_cidade_orig, lbl_local), use_container_width=True, hide_index=True)
@@ -498,7 +513,6 @@ with aba1:
         gerar_legenda(t_sim_legenda)
         
     with col_t2:
-        # LÓGICA DE CRUZAMENTO REAL PARA EVITAR FANTASMAS E CONTAGENS ERRADAS
         df_comp = df_mapa_orig_agg[['Bairro', 'Parceiros']].merge(df_mapa_sim_agg[['Bairro', 'Parceiros']], on='Bairro', suffixes=('_orig', '_sim'))
         locais_modificados = df_comp[df_comp['Parceiros_orig'] != df_comp['Parceiros_sim']]['Bairro']
         
@@ -509,6 +523,19 @@ with aba1:
         lbl_mod = "Municípios Trocados" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros Trocados"
         c1.metric(lbl_mod, qtd_mod)
         c2.metric("Volume Afetado", f"{vol_mod:,.0f}".replace(',','.'))
+        
+        # --- NOVA INFORMAÇÃO DE ABRANGÊNCIA (SIMULADO) ---
+        st.markdown(f"**Abrangência ({lbl_locais}):**")
+        for base, qtd in df_cidade_sim.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
+            st.write(f"- {base}: **{qtd}**")
+            
+        locais_comp_sim = df_mapa_sim_agg[df_mapa_sim_agg['Qtd_Bases'] > 1].shape[0]
+        if locais_comp_sim > 0:
+            st.write(f"- 🔴 Compartilhados (Sobreposição): **{locais_comp_sim}**")
+        else:
+            st.write(f"- 🟢 Compartilhados: **0**")
+        st.markdown("<br>", unsafe_allow_html=True)
+        # -------------------------------------------------
         
         st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
         with st.expander(f"📊 Ver Volume por {lbl_local}"):

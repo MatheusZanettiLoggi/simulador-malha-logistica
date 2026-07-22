@@ -322,19 +322,29 @@ if divergentes:
                         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
                     st.rerun()
 
+# LÓGICA DE DADOS DINÂMICOS PARA BARRA LATERAL (Impede que parceiros sumam da legenda)
 df_cidade_sim = df_cidade_orig.copy()
-transp_ativas = sorted(df_cidade_orig['Transportadora'].unique())
+for idx, row in df_cidade_sim.iterrows():
+    chave_bairro = row['Bairro']
+    if chave_bairro in st.session_state.simulacoes:
+        df_cidade_sim.at[idx, 'Transportadora'] = st.session_state.simulacoes[chave_bairro]
+
+df_cidade_ia_temp = df_cidade_orig.copy()
+if 'ia_resultado' in st.session_state:
+    for idx, row in df_cidade_ia_temp.iterrows():
+        if row['Bairro'] in st.session_state.ia_resultado:
+            df_cidade_ia_temp.at[idx, 'Transportadora'] = st.session_state.ia_resultado[row['Bairro']]
+
+transp_ativas = set(df_cidade_orig['Transportadora'].unique())
+transp_ativas.update(df_cidade_sim['Transportadora'].unique())
+transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
+transp_ativas = sorted(list(transp_ativas))
 
 st.sidebar.markdown("---")
 transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", transp_ativas, default=transp_ativas)
 with st.sidebar.expander("🎨 Personalizar Cores"):
     for transp in transp_ativas:
         st.session_state.cores_transp[transp] = st.color_picker(f"{transp}", st.session_state.cores_transp.get(transp, '#000000'))
-
-for idx, row in df_cidade_sim.iterrows():
-    chave_bairro = row['Bairro']
-    if chave_bairro in st.session_state.simulacoes:
-        df_cidade_sim.at[idx, 'Transportadora'] = st.session_state.simulacoes[chave_bairro]
 
 @st.cache_data
 def prepara_mapa(df):
@@ -466,7 +476,7 @@ with aba1:
         if not gdf_mapa_orig.empty:
             cy, cx = gdf_mapa_orig.geometry.centroid.y.mean(), gdf_mapa_orig.geometry.centroid.x.mean()
         else:
-            cy, cx = -15.7801, -47.9292 # Centro do Brasil como fallback
+            cy, cx = -15.7801, -47.9292 
         zoom_padrao = 11 if modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
     col_m1, col_t1 = st.columns([2, 1])
@@ -483,7 +493,6 @@ with aba1:
     with col_t1:
         st.metric("📦 Pacotes (Atual)", f"{df_cidade_orig['Volume'].sum():,.0f}".replace(',','.'))
         
-        # --- NOVA INFORMAÇÃO DE ABRANGÊNCIA (ATUAL) ---
         st.markdown(f"**Abrangência ({lbl_locais}):**")
         for base, qtd in df_cidade_orig.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
             st.write(f"- {base}: **{qtd}**")
@@ -494,7 +503,6 @@ with aba1:
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
         st.markdown("<br>", unsafe_allow_html=True)
-        # ----------------------------------------------
         
         st.dataframe(gerar_tabela(df_cidade_orig), use_container_width=True, hide_index=True)
         with st.expander(f"📊 Ver Volume por {lbl_local}"):
@@ -524,7 +532,6 @@ with aba1:
         c1.metric(lbl_mod, qtd_mod)
         c2.metric("Volume Afetado", f"{vol_mod:,.0f}".replace(',','.'))
         
-        # --- NOVA INFORMAÇÃO DE ABRANGÊNCIA (SIMULADO) ---
         st.markdown(f"**Abrangência ({lbl_locais}):**")
         for base, qtd in df_cidade_sim.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
             st.write(f"- {base}: **{qtd}**")
@@ -535,7 +542,6 @@ with aba1:
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
         st.markdown("<br>", unsafe_allow_html=True)
-        # -------------------------------------------------
         
         st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
         with st.expander(f"📊 Ver Volume por {lbl_local}"):
@@ -697,7 +703,12 @@ with aba2:
             col_ia_m, col_ia_t = st.columns([2, 1])
             with col_ia_m:
                 desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.coords_bases)
-                gerar_legenda(bases_ativas + ['Sem Dados / Divergência'])
+                
+                # CORREÇÃO DA LEGENDA DA IA: Lê exatamente os parceiros desenhados no mapa (e não os inputs temporários)
+                bases_ativas_ia = sorted(df_cidade_ia['Transportadora'].unique())
+                t_ia_legenda = [t for t in bases_ativas_ia if t in transp_selecionadas_sidebar]
+                t_ia_legenda.append('Sem Dados / Divergência')
+                gerar_legenda(t_ia_legenda)
                 
             with col_ia_t:
                 st.metric("Pacotes (Alocados pela IA)", f"{df_cidade_ia['Volume'].sum():,.0f}".replace(',','.'))

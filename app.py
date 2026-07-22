@@ -322,7 +322,6 @@ if divergentes:
                         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
                     st.rerun()
 
-# LÓGICA DE DADOS DINÂMICOS PARA BARRA LATERAL (Impede que parceiros sumam da legenda)
 df_cidade_sim = df_cidade_orig.copy()
 for idx, row in df_cidade_sim.iterrows():
     chave_bairro = row['Bairro']
@@ -416,10 +415,28 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
+            # AQUI ESTÁ A MÁGICA DO PINO COLORIDO COM A COR DA LEGENDA DA BASE
+            cor_base = st.session_state.cores_transp.get(base, '#333333')
+            html_pino = f"""
+            <div style="
+                background-color: {cor_base};
+                width: 32px;
+                height: 32px;
+                border-radius: 50%;
+                border: 2px solid white;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+                font-size: 16px;
+            ">
+                🏠
+            </div>
+            """
             folium.Marker(
                 coords,
                 tooltip=f"🏢 Sede: {base}",
-                icon=folium.Icon(color='green', icon='home')
+                icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
             ).add_to(m)
             
     folium_static(m, width=700, height=400)
@@ -704,7 +721,6 @@ with aba2:
             with col_ia_m:
                 desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.coords_bases)
                 
-                # CORREÇÃO DA LEGENDA DA IA: Lê exatamente os parceiros desenhados no mapa (e não os inputs temporários)
                 bases_ativas_ia = sorted(df_cidade_ia['Transportadora'].unique())
                 t_ia_legenda = [t for t in bases_ativas_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')

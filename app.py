@@ -8,6 +8,7 @@ import difflib
 import json
 import os
 import re
+import time
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
@@ -56,6 +57,20 @@ def gerar_tabela(df_cidade_tabela):
     linha_total = pd.DataFrame({'Transportadora': ['TOTAL'], 'Volume': [total_vol], '%': ['100.0%']})
     return pd.concat([vol_tabela, linha_total], ignore_index=True)
 
+def gerar_tabela_detalhada(df_cidade_tabela, rotulo_local):
+    if df_cidade_tabela.empty:
+        return pd.DataFrame()
+    vol_detalhe = df_cidade_tabela.groupby(['Transportadora', 'Bairro'])['Volume'].sum().reset_index()
+    vol_detalhe.rename(columns={'Bairro': rotulo_local}, inplace=True)
+    
+    total_vol = vol_detalhe['Volume'].sum()
+    if total_vol > 0:
+        vol_detalhe['%'] = (vol_detalhe['Volume'] / total_vol * 100).map('{:.1f}%'.format)
+    else:
+        vol_detalhe['%'] = '0.0%'
+        
+    return vol_detalhe.sort_values(['Transportadora', 'Volume'], ascending=[True, False])
+
 def gerar_legenda(transp_presentes):
     st.markdown("<br>**Legenda de Cores:**", unsafe_allow_html=True)
     legenda = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px;'>"
@@ -83,6 +98,22 @@ def gerar_ranges_cep(df_cidade):
 # ==========================================
 # FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
 # ==========================================
+
+# NOVO: Função de Busca com Memória (Impede o Erro 429)
+@st.cache_data(show_spinner=False)
+def buscar_coordenadas(endereco_busca):
+    # O Nominatim exige no máximo 1 requisição por segundo. O sleep garante isso.
+    time.sleep(1.5) 
+    try:
+        # User_agent personalizado para evitar bloqueios genéricos
+        geolocator = Nominatim(user_agent="simulador_malha_logistica_v3")
+        location = geolocator.geocode(endereco_busca, timeout=15)
+        if location:
+            return (location.latitude, location.longitude)
+    except Exception:
+        pass
+    return None
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -187,6 +218,8 @@ modo_analise = st.sidebar.radio(
     "Selecione o nível de granularidade:",
     options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"]
 )
+
+lbl_local = "Município" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 
 st.sidebar.divider()
 st.sidebar.title("📁 Importação de Dados")
@@ -445,6 +478,8 @@ with aba1:
     with col_t1:
         st.metric("Pacotes (Atual)", f"{df_cidade_orig['Volume'].sum():,.0f}".replace(',','.'))
         st.dataframe(gerar_tabela(df_cidade_orig), use_container_width=True, hide_index=True)
+        with st.expander(f"📊 Ver Volume por {lbl_local}"):
+            st.dataframe(gerar_tabela_detalhada(df_cidade_orig, lbl_local), use_container_width=True, hide_index=True)
 
     st.markdown("---")
     col_m2, col_t2 = st.columns([2, 1])
@@ -461,6 +496,8 @@ with aba1:
     with col_t2:
         st.metric("Locais Modificados", len(st.session_state.simulacoes))
         st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
+        with st.expander(f"📊 Ver Volume por {lbl_local}"):
+            st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
 
 # ==========================================
 # ABA 2: Inteligência Artificial
@@ -485,6 +522,7 @@ with aba2:
                 with col_ia1 if i % 2 == 0 else col_ia2:
                     st.markdown(f"**{base}**")
                     
+                    def_end = f"Centro, {cidade_selecionada}" if cidade_selecionada != 'Visão Regional (Estado Completo)' else ""
                     enderecos[base] = st.text_input(
                         f"Endereço da Sede ({base})", 
                         value="", 
@@ -515,7 +553,6 @@ with aba2:
         if submit_ia:
             with st.spinner("Geocodificando endereços e calculando distâncias... Isso pode levar alguns segundos."):
                 try:
-                    geolocator = Nominatim(user_agent="simulador_malha_log")
                     coords_bases = {}
                     erros_geo = []
                     
@@ -524,33 +561,29 @@ with aba2:
                             erros_geo.append((base, "Endereço em branco"))
                             continue
                             
-                        # Tenta encontrar no satélite exatamente o que o usuário digitou
                         st.caption(f"📍 *Buscando:* {end}")
                         
-                        location = geolocator.geocode(end.strip(), timeout=15)
+                        # Função com memória cache que evita o erro 429
+                        coords = buscar_coordenadas(end.strip())
                         
-                        # Se falhou e o usuário esqueceu o país, tenta adicionar "Brasil" discretamente
-                        if not location and "brasil" not in end.lower():
-                            location = geolocator.geocode(f"{end.strip()}, Brasil", timeout=15)
+                        if not coords and "brasil" not in end.lower():
+                            coords = buscar_coordenadas(f"{end.strip()}, Brasil")
                             
-                        if location: 
-                            coords_bases[base] = (location.latitude, location.longitude)
+                        if coords: 
+                            coords_bases[base] = coords
                         else: 
-                            # TRAVA DE EMERGÊNCIA: Guarda o erro para exibir e matar o processo
                             erros_geo.append((base, end))
                     
-                    # 🔴 BLOQUEIO RÍGIDO SE O MAPA FALHAR
                     if erros_geo:
                         for err in erros_geo:
                             st.error(f"❌ **Base {err[0]}:** Não foi possível encontrar a coordenada exata para o endereço ('{err[1]}').")
-                        st.info("💡 **DICA:** Não copie o endereço com barras, nomes de galpão ou traços do Looker. Digite de forma limpa: **Rua, Número, Cidade - UF**.")
-                        st.stop() # Mata a simulação antes que ela preencha o mapa com erros
+                        st.info("💡 **DICA:** Não copie o endereço com barras, nomes de galpões ou traços do Looker. Digite de forma limpa: **Rua, Número, Cidade - UF**.")
+                        st.stop()
                     
                     total_volume_cidade = df_cidade_orig['Volume'].sum()
                     volume_alvo = {b: total_volume_cidade * (pct/100) for b, pct in target_vols.items()}
                     volume_atual = {b: 0 for b in bases_ativas}
                     
-                    # LOGICA BLINDADA DE NOMES: Garante que Bairros/Cidades não se percam pelo nome da planilha
                     bairros_unicos = {}
                     for _, row in gdf_cidade.iterrows():
                         jb = row['Join_Bairro']
@@ -562,7 +595,7 @@ with aba2:
                                 bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())
-                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True) # Ordena pelas maiores cidades
+                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True) 
 
                     alocacao_ia = {}
                     for b_info in bairros_info:
@@ -570,7 +603,7 @@ with aba2:
                         bases_ordenadas = sorted(distancias.keys(), key=lambda k: distancias[k])
                         
                         alocada = False
-                        base_escolhida = bases_ordenadas[0] # Padrão para a mais próxima
+                        base_escolhida = bases_ordenadas[0]
                         
                         for base_proxima in bases_ordenadas:
                             if volume_atual[base_proxima] + b_info['Vol'] <= volume_alvo[base_proxima] * 1.20: 
@@ -580,11 +613,9 @@ with aba2:
                                 break
                                 
                         if not alocada:
-                            # Se a cidade é muito grande e não cabe na mais próxima, força para a que tem a maior meta sobrando
                             base_escolhida = max(bases_ativas, key=lambda b: volume_alvo[b] - volume_atual[b])
                             volume_atual[base_escolhida] += b_info['Vol']
                             
-                        # Distribui a cor para TODAS as variações de nome que aquela cidade tiver na planilha!
                         bairros_variacoes = df_cidade_orig[df_cidade_orig['Join_Bairro'] == b_info['Join_Bairro']]['Bairro'].unique()
                         for bv in bairros_variacoes:
                             alocacao_ia[bv] = base_escolhida
@@ -610,7 +641,6 @@ with aba2:
 
             df_cidade_ia = df_cidade_orig.copy()
             for idx, row in df_cidade_ia.iterrows():
-                # A chave agora baterá 100% com o Bairro original da planilha, zerando o risco de bugar a %
                 if row['Bairro'] in st.session_state.ia_resultado:
                     df_cidade_ia.at[idx, 'Transportadora'] = st.session_state.ia_resultado[row['Bairro']]
                 else:
@@ -630,6 +660,8 @@ with aba2:
             with col_ia_t:
                 st.metric("Pacotes (Alocados pela IA)", f"{df_cidade_ia['Volume'].sum():,.0f}".replace(',','.'))
                 st.dataframe(gerar_tabela(df_cidade_ia), use_container_width=True, hide_index=True)
+                with st.expander(f"📊 Ver Volume por {lbl_local}"):
+                    st.dataframe(gerar_tabela_detalhada(df_cidade_ia, lbl_local), use_container_width=True, hide_index=True)
 
 # ==========================================
 # ABA 3: Exportação e Ranges de CEP OFICIAIS

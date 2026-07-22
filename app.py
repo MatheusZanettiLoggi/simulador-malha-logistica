@@ -415,9 +415,8 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
-            # AQUI ESTÁ A MÁGICA DO PINO COLORIDO COM A COR DA LEGENDA DA BASE
             cor_base = st.session_state.cores_transp.get(base, '#333333')
-            html_pino = f"""
+            html_pino = f'''
             <div style="
                 background-color: {cor_base};
                 width: 32px;
@@ -432,7 +431,7 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
             ">
                 🏠
             </div>
-            """
+            '''
             folium.Marker(
                 coords,
                 tooltip=f"🏢 Sede: {base}",
@@ -447,18 +446,27 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 with aba1:
     st.markdown("### 🔄 Simulador de Troca Manual")
     
+    modo_troca = st.radio("Escolha o tipo de simulação:", ["📍 Troca por Locais Específicos", "🏢 Migração de Base Completa (De ➔ Para)"], horizontal=True)
+    
     with st.form("form_troca_manual"):
         col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
         
-        with col_s1:
-            bairros_sim = st.multiselect("1. Selecione a(s) Região(ões)", sorted(df_cidade_orig['Bairro'].unique()))
-        
-        with col_s2:
-            nova_transp = st.selectbox("2. Para a Transportadora:", sorted(df_vol['Transportadora'].unique()))
-            
-        with col_s3:
-            st.markdown("<br>", unsafe_allow_html=True)
-            btn_aplicar_troca = st.form_submit_button("Aplicar Troca", use_container_width=True, type="primary")
+        if modo_troca == "📍 Troca por Locais Específicos":
+            with col_s1:
+                bairros_sim = st.multiselect("1. Selecione a(s) Região(ões)", sorted(df_cidade_orig['Bairro'].unique()))
+            with col_s2:
+                nova_transp = st.selectbox("2. Para a Transportadora:", sorted(df_vol['Transportadora'].unique()))
+            with col_s3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                btn_aplicar_troca = st.form_submit_button("Aplicar Troca", use_container_width=True, type="primary")
+        else:
+            with col_s1:
+                base_origem = st.selectbox("1. Transferir toda a abrangência de:", sorted(df_cidade_sim['Transportadora'].unique()))
+            with col_s2:
+                base_destino = st.selectbox("2. Para a Transportadora:", sorted(df_vol['Transportadora'].unique()))
+            with col_s3:
+                st.markdown("<br>", unsafe_allow_html=True)
+                btn_aplicar_troca = st.form_submit_button("Migrar Operação", use_container_width=True, type="primary")
 
     col_spacer, col_clear = st.columns([6, 1])
     with col_clear:
@@ -469,12 +477,25 @@ with aba1:
             st.rerun()
 
     if btn_aplicar_troca:
-        if bairros_sim:
-            for b in bairros_sim:
-                st.session_state.simulacoes[b] = nova_transp
-            st.rerun()
+        if modo_troca == "📍 Troca por Locais Específicos":
+            if bairros_sim:
+                for b in bairros_sim:
+                    st.session_state.simulacoes[b] = nova_transp
+                st.rerun()
+            else:
+                st.warning("Selecione um ou mais locais na lista acima antes de aplicar!")
         else:
-            st.warning("Selecione um ou mais locais na lista acima antes de aplicar!")
+            if base_origem == base_destino:
+                st.warning("A base de origem e de destino devem ser diferentes!")
+            else:
+                locais_afetados = df_cidade_sim[df_cidade_sim['Transportadora'] == base_origem]['Bairro'].unique()
+                if len(locais_afetados) > 0:
+                    for b in locais_afetados:
+                        st.session_state.simulacoes[b] = base_destino
+                    st.toast(f"✅ Operação inteira de {base_origem} transferida para {base_destino}!")
+                    st.rerun()
+                else:
+                    st.warning(f"A base {base_origem} não possui locais vinculados no cenário atual para transferir.")
 
     df_mapa_sim_agg = prepara_mapa(df_cidade_sim)
     df_mapa_orig_agg = prepara_mapa(df_cidade_orig)

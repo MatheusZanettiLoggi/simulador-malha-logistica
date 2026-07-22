@@ -75,7 +75,6 @@ def gerar_legenda(transp_presentes):
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
 
-# OTIMIZAÇÃO: Tabela de Ranges agora guarda cálculo na memória cache
 @st.cache_data
 def gerar_ranges_cep(df_cidade):
     if df_cidade.empty:
@@ -157,7 +156,6 @@ def load_dados(excel_file, zip_file, modo):
         f.write(zip_file.getbuffer())
     gdf = gpd.read_file('zip://temp_mapa.zip')
     
-    # OTIMIZAÇÃO: Simplifica a malha do IBGE para carregar o mapa 10x mais rápido
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     if modo == "🏙️ Intra-Município (Por Bairros)":
@@ -308,7 +306,6 @@ for idx, row in df_cidade_sim.iterrows():
     if chave_bairro in st.session_state.simulacoes:
         df_cidade_sim.at[idx, 'Transportadora'] = st.session_state.simulacoes[chave_bairro]
 
-# OTIMIZAÇÃO: Prepara mapa cacheado
 @st.cache_data
 def prepara_mapa(df):
     return df.groupby(['Join_Bairro']).agg(
@@ -478,14 +475,13 @@ with aba1:
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
     st.info("A IA formatará os endereços, encontrará as coordenadas e alocará as regiões baseadas na proximidade para atingir a meta. **Não haverá sobreposição.**")
-    st.caption("💡 *Dica de Ouro: Para não dar erro de busca, use endereços simples como 'Estrada dos Bandeirantes 11311, Rio de Janeiro'.*")
     
     bases_ativas = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
     if bases_ativas:
-        # OTIMIZAÇÃO: O uso do Formulário impede o aplicativo de carregar enquanto você digita
         with st.form("form_ia_config"):
             st.markdown("##### ⚙️ Configuração das Metas")
+            st.caption("Ajuste as barras para definir a proporção desejada para cada base. O sistema calculará as porcentagens automaticamente.")
             col_ia1, col_ia2 = st.columns(2)
             pesos_vols = {}
             enderecos = {}
@@ -494,8 +490,7 @@ with aba2:
                 with col_ia1 if i % 2 == 0 else col_ia2:
                     st.markdown(f"**{base}**")
                     enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=f"Centro, {cidade_selecionada}", key=f"end_{base}")
-                    # Usando número inteiro como "peso", o sistema calculará as porcentagens sozinho depois
-                    pesos_vols[base] = st.number_input(f"Peso de Volume - {base}", min_value=1, max_value=100, value=int(100/len(bases_ativas)), key=f"vol_{base}")
+                    pesos_vols[base] = st.slider(f"Proporção de Volume - {base}", min_value=0, max_value=100, value=int(100/len(bases_ativas)), key=f"vol_{base}")
                     st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
             
             submit_ia = st.form_submit_button("🚀 Gerar Malha Inteligente", type="primary")
@@ -503,9 +498,11 @@ with aba2:
         if submit_ia:
             with st.spinner("Geocodificando endereços e calculando distâncias... Isso pode levar alguns segundos."):
                 try:
-                    # Normaliza os pesos matematicamente para garantirmos que a soma seja sempre 100%
                     total_peso = sum(pesos_vols.values())
-                    target_vols = {b: (p / total_peso) * 100 for b, p in pesos_vols.items()}
+                    if total_peso == 0:
+                        target_vols = {b: 100/len(bases_ativas) for b in bases_ativas}
+                    else:
+                        target_vols = {b: (p / total_peso) * 100 for b, p in pesos_vols.items()}
                     
                     geolocator = Nominatim(user_agent="simulador_malha_log")
                     coords_bases = {}

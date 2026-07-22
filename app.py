@@ -33,15 +33,6 @@ def formatar_cep(cep):
         return f"{cep_limpo[:5]}-{cep_limpo[5:]}"
     return cep
 
-# CORREÇÃO: O simplificador não corta mais o texto no meio, mantendo a inteligência da busca!
-def simplificar_endereco(endereco, cidade):
-    end = str(endereco).strip()
-    end = end.replace('Av.', 'Avenida').replace('R.', 'Rua')
-    if cidade != 'Visão Regional (Estado Completo)':
-        if cidade.lower() not in end.lower():
-            end = f"{end}, {cidade}"
-    return end
-
 def misturar_cores(lista_hex):
     r, g, b = 0, 0, 0
     cores_validas = 0
@@ -481,42 +472,42 @@ with aba2:
     bases_ativas = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
     if bases_ativas:
-        st.markdown("##### ⚙️ Configuração das Metas")
-        st.caption("Ajuste a proporção desejada nas barras (%) abaixo. A última base fechará os 100% automaticamente.")
-        
-        col_ia1, col_ia2 = st.columns(2)
-        target_vols = {}
-        enderecos = {}
-        pct_restante = 100
-        
-        for i, base in enumerate(bases_ativas):
-            with col_ia1 if i % 2 == 0 else col_ia2:
-                st.markdown(f"**{base}**")
-                
-                # Se for regional, o campo de endereço vem limpo para o usuário preencher livremente
-                def_end = f"Centro, {cidade_selecionada}" if cidade_selecionada != 'Visão Regional (Estado Completo)' else ""
-                enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=def_end, key=f"end_{base}")
-                
-                # Regra dos Sliders em Cascata com (%)
-                if i < len(bases_ativas) - 1:
-                    val = st.slider(
-                        f"Volume Alvo (%)", 
-                        min_value=0, 
-                        max_value=pct_restante, 
-                        value=min(pct_restante, int(100/len(bases_ativas))), 
-                        format="%d%%",
-                        key=f"vol_{base}"
-                    )
-                    target_vols[base] = val
-                    pct_restante -= val
-                else:
-                    target_vols[base] = pct_restante
-                    st.info(f"Volume Automático: **{pct_restante}%**")
-                
-                st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-        
-        # O botão engatilha o cálculo pesado de IA apenas no clique
-        if st.button("🚀 Gerar Malha Inteligente", type="primary"):
+        with st.form("form_ia_config"):
+            st.markdown("##### ⚙️ Configuração das Metas")
+            st.caption("Ajuste a proporção desejada nas barras (%) abaixo. A última base fechará os 100% automaticamente.")
+            
+            col_ia1, col_ia2 = st.columns(2)
+            target_vols = {}
+            enderecos = {}
+            pct_restante = 100
+            
+            for i, base in enumerate(bases_ativas):
+                with col_ia1 if i % 2 == 0 else col_ia2:
+                    st.markdown(f"**{base}**")
+                    
+                    def_end = f"Centro, {cidade_selecionada}" if cidade_selecionada != 'Visão Regional (Estado Completo)' else ""
+                    enderecos[base] = st.text_input(f"Endereço da Sede ({base})", value=def_end, key=f"end_{base}")
+                    
+                    if i < len(bases_ativas) - 1:
+                        val = st.slider(
+                            f"Volume Alvo (%)", 
+                            min_value=0, 
+                            max_value=pct_restante, 
+                            value=min(pct_restante, int(100/len(bases_ativas))), 
+                            format="%d%%",
+                            key=f"vol_{base}"
+                        )
+                        target_vols[base] = val
+                        pct_restante -= val
+                    else:
+                        target_vols[base] = pct_restante
+                        st.info(f"Volume Automático: **{pct_restante}%**")
+                    
+                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
+            
+            submit_ia = st.form_submit_button("🚀 Gerar Malha Inteligente", type="primary")
+
+        if submit_ia:
             with st.spinner("Geocodificando endereços e calculando distâncias... Isso pode levar alguns segundos."):
                 try:
                     geolocator = Nominatim(user_agent="simulador_malha_log")
@@ -524,66 +515,76 @@ with aba2:
                     erros_geo = []
                     
                     for base, end in enderecos.items():
-                        end_simplificado = simplificar_endereco(end, cidade_selecionada)
-                        
-                        if not end_simplificado.strip():
+                        if not end.strip():
                             erros_geo.append((base, "Endereço em branco"))
                             continue
                             
-                        st.caption(f"📍 *Buscando:* {end_simplificado}")
-                        location = geolocator.geocode(f"{end_simplificado}, Brasil", timeout=15)
+                        # 1. Tenta a busca do jeito que o usuário escreveu
+                        st.caption(f"📍 *Buscando original:* {end}")
+                        location = geolocator.geocode(f"{end}, Brasil", timeout=15)
                         
-                        # Fallback de emergência caso o usuário tenha digitado um traço (CEP) que confunda a IA
-                        if not location and '-' in end_simplificado:
-                            end_fallback = end_simplificado.split('-')[0].strip()
-                            location = geolocator.geocode(f"{end_fallback}, Brasil", timeout=15)
+                        # 2. IA de Auto-Limpeza: Se falhou, remove CEPs, bairros e tenta de novo
+                        if not location:
+                            # Remove padrões que parecem CEP (ex: 18208-670)
+                            end_limpo = re.sub(r'\b\d{5}-?\d{3}\b', '', end)
+                            # Pega apenas o que vem antes do primeiro traço (geralmente logradouro + numero)
+                            if '-' in end_limpo:
+                                end_limpo = end_limpo.split('-')[0].strip()
+                                
+                            # Se for análise estadual, não força a cidade. Se for local, garante a cidade no fim.
+                            if cidade_selecionada != 'Visão Regional (Estado Completo)' and cidade_selecionada.lower() not in end_limpo.lower():
+                                end_limpo = f"{end_limpo}, {cidade_selecionada}"
+                                
+                            st.caption(f"♻️ *Buscando simplificado:* {end_limpo}")
+                            location = geolocator.geocode(f"{end_limpo}, Brasil", timeout=15)
                             
+                        # Se encontrou depois da limpeza, guarda. Se não, marca como erro.
                         if location: 
                             coords_bases[base] = (location.latitude, location.longitude)
                         else: 
-                            # Se não achou de jeito nenhum, guarda o erro para a trava vermelha
-                            erros_geo.append((base, end_simplificado))
-                            coords_bases[base] = (cy, cx)
+                            erros_geo.append((base, end))
                     
-                    # 🔴 Trava Vermelha: Interrompe tudo se algum endereço estiver ruim
+                    # 🔴 TRAVA RÍGIDA: Se alguma base falhar, interrompe o sistema imediatamente!
                     if erros_geo:
                         for err in erros_geo:
-                            st.error(f"❌ **Base {err[0]}:** Não foi possível encontrar o endereço '{err[1]}'.\n\n*Dica: Evite colocar o nome do bairro. Use o formato: 'Rua/Avenida, Número, Cidade - UF' (Ex: Avenida Paulista, 1000, São Paulo - SP).*")
-                        st.stop()
+                            st.error(f"❌ **Base {err[0]}:** Não consegui encontrar no mapa as coordenadas para o endereço abaixo, mesmo tentando simplificá-lo.\n\n**Você digitou:** '{err[1]}'\n\n💡 **DICA:** O satélite se confunde com nomes de galpões, bairros extras ou traços. Tente usar apenas: **'Rua, Número, Cidade - UF'** (Ex: *Avenida Paulista, 1000, São Paulo - SP*).")
+                        st.stop() # Mata a execução aqui. O mapa não é gerado!
                     
                     total_volume_cidade = df_cidade_orig['Volume'].sum()
                     volume_alvo = {b: total_volume_cidade * (pct/100) for b, pct in target_vols.items()}
                     volume_atual = {b: 0 for b in bases_ativas}
                     
-                    bairros_info = []
+                    bairros_unicos = {}
                     for _, row in gdf_cidade.iterrows():
-                        if pd.notnull(row['geometry']):
+                        jb = row['Join_Bairro']
+                        if pd.notnull(row['geometry']) and jb not in bairros_unicos:
                             c_y, c_x = row['geometry'].centroid.y, row['geometry'].centroid.x
-                            df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == row['Join_Bairro']]
+                            df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == jb]
                             vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
                                 bairro_original = df_match['Bairro'].iloc[0]
-                                bairros_info.append({'Bairro': bairro_original, 'Join_Bairro': row['Join_Bairro'], 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x})
-                    
+                                bairros_unicos[jb] = {'Bairro': bairro_original, 'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
+                                
+                    bairros_info = list(bairros_unicos.values())
+                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True)
+
                     alocacao_ia = {}
                     for b_info in bairros_info:
-                        distancias = {}
-                        for base in bases_ativas:
-                            dist = geodesic((b_info['lat'], b_info['lon']), coords_bases[base]).km
-                            distancias[base] = dist
-                        
+                        distancias = {base: geodesic((b_info['lat'], b_info['lon']), coords_bases[base]).km for base in bases_ativas}
                         bases_ordenadas = sorted(distancias.keys(), key=lambda k: distancias[k])
+                        
                         alocada = False
                         for base_proxima in bases_ordenadas:
-                            if volume_atual[base_proxima] + b_info['Vol'] <= volume_alvo[base_proxima] * 1.15: 
+                            if volume_atual[base_proxima] + b_info['Vol'] <= volume_alvo[base_proxima] * 1.20: 
                                 alocacao_ia[b_info['Bairro']] = base_proxima
                                 volume_atual[base_proxima] += b_info['Vol']
                                 alocada = True
                                 break
-                        
+                                
                         if not alocada:
-                            alocacao_ia[b_info['Bairro']] = bases_ordenadas[0]
-                            volume_atual[bases_ordenadas[0]] += b_info['Vol']
+                            base_mais_vazia = max(bases_ativas, key=lambda b: volume_alvo[b] - volume_atual[b])
+                            alocacao_ia[b_info['Bairro']] = base_mais_vazia
+                            volume_atual[base_mais_vazia] += b_info['Vol']
 
                     st.session_state.ia_resultado = alocacao_ia
                     st.session_state.coords_bases = coords_bases

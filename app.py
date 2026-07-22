@@ -282,7 +282,6 @@ df_vol = df_vol_raw.copy()
 df_vol['Bairro'] = df_vol['Bairro'].apply(lambda x: st.session_state.de_para_bairros.get(x, x))
 df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
 
-# MAGICA DE PADRONIZAÇÃO: Força o Title Case e junta todas as variações da mesma cidade
 df_vol['Bairro'] = df_vol['Bairro'].astype(str).str.title()
 df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x.mode()[0] if not x.empty else x)
 
@@ -420,7 +419,6 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 with aba1:
     st.markdown("### 🔄 Simulador de Troca Manual")
     
-    # MODIFICAÇÃO: Modo Formulário impede o recálculo do mapa a cada nova cidade selecionada
     with st.form("form_troca_manual"):
         col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
         
@@ -434,7 +432,6 @@ with aba1:
             st.markdown("<br>", unsafe_allow_html=True)
             btn_aplicar_troca = st.form_submit_button("Aplicar Troca", use_container_width=True, type="primary")
 
-    # Botão de limpar mantido fora do formulário para ação independente
     col_spacer, col_clear = st.columns([6, 1])
     with col_clear:
         if st.button("Limpar Simulações", use_container_width=True):
@@ -443,7 +440,6 @@ with aba1:
             if 'ia_resultado' in st.session_state: del st.session_state['ia_resultado']
             st.rerun()
 
-    # O código só entra aqui após o usuário clicar em "Aplicar Troca"
     if btn_aplicar_troca:
         if bairros_sim:
             for b in bairros_sim:
@@ -502,7 +498,14 @@ with aba1:
         gerar_legenda(t_sim_legenda)
         
     with col_t2:
-        st.metric("Locais Modificados", len(st.session_state.simulacoes))
+        # NOVO RESUMO DE METRICAS
+        c1, c2 = st.columns(2)
+        lbl_mod = "Municípios Trocados" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros Trocados"
+        vol_mod = df_cidade_sim[df_cidade_sim['Bairro'].isin(st.session_state.simulacoes.keys())]['Volume'].sum()
+        
+        c1.metric(lbl_mod, len(st.session_state.simulacoes))
+        c2.metric("Volume Afetado", f"{vol_mod:,.0f}".replace(',','.'))
+        
         st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
         with st.expander(f"📊 Ver Volume por {lbl_local}"):
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
@@ -599,7 +602,6 @@ with aba2:
                             df_match = df_cidade_orig[df_cidade_orig['Join_Bairro'] == jb]
                             vol_bairro = df_match['Volume'].sum()
                             if vol_bairro > 0:
-                                bairro_original = df_match['Bairro'].iloc[0]
                                 bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())
@@ -627,6 +629,11 @@ with aba2:
                         bairros_variacoes = df_cidade_orig[df_cidade_orig['Join_Bairro'] == b_info['Join_Bairro']]['Bairro'].unique()
                         for bv in bairros_variacoes:
                             alocacao_ia[bv] = base_escolhida
+                            
+                    # LOGICA BLINDADA: Preenche possíveis bairros que não estavam no mapa geográfico (fantasmas)
+                    for b in df_cidade_full['Bairro'].unique():
+                        if b not in alocacao_ia:
+                            alocacao_ia[b] = bases_ativas[0]
 
                     st.session_state.ia_resultado = alocacao_ia
                     st.session_state.coords_bases = coords_bases
@@ -641,9 +648,6 @@ with aba2:
             
             if st.button("📥 Tomar esta proposta como Cenário 2 (Manual)", type="primary"):
                 st.session_state.simulacoes = st.session_state.ia_resultado.copy()
-                for b in df_cidade_orig['Bairro'].unique():
-                    if b not in st.session_state.simulacoes:
-                        st.session_state.simulacoes[b] = bases_ativas[0]
                 st.toast("✅ Cenário Manual atualizado! Vá para a aba 'Simulador Manual'.")
                 st.rerun()
 

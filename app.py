@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -9,11 +10,26 @@ import json
 import os
 import re
 import time
+import io
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
 # 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
+
+# INJEÇÃO DE CSS PARA MODO IMPRESSÃO (PDF)
+st.markdown("""
+    <style>
+    @media print {
+        section[data-testid="stSidebar"] { display: none !important; }
+        header[data-testid="stHeader"] { display: none !important; }
+        button { display: none !important; }
+        .stTabs [data-baseweb="tab-list"] { display: none !important; }
+        .main .block-container { padding: 0 !important; max-width: 100% !important; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ==========================================
 # COLUNA DE CEP DEFINIDA PARA O LOOKER E DE-PARA
@@ -102,7 +118,7 @@ def gerar_ranges_cep(df_cidade):
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
     try:
-        geolocator = Nominatim(user_agent="simulador_malha_logistica_v3")
+        geolocator = Nominatim(user_agent="simulador_malha_logistica_v4")
         location = geolocator.geocode(endereco_busca, timeout=15)
         if location:
             return (location.latitude, location.longitude)
@@ -223,29 +239,16 @@ st.sidebar.title("📁 Importação de Dados")
 
 st.sidebar.markdown("**1. Planilha de Volumetria**")
 st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
-st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26291)")
 arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
 
 st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
 
 if modo_analise == "🏙️ Intra-Município (Por Bairros)":
     st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
-    st.sidebar.markdown("[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Bairros (ZIP)", type=['zip'], key="up_bairro")
-    with st.sidebar.expander("❓ Como baixar o arquivo correto?"):
-        st.write("1. Clique no link acima.")
-        st.write("2. Clique na pasta correspondente ao seu Estado (ex: RJ).")
-        st.write("3. Baixe o arquivo `.zip` final.")
-        st.write("4. Faça o upload aqui **sem descompactar**.")
 else:
     st.sidebar.caption("Para migrações de malha entre bases, precisamos do mapa de Municípios.")
-    st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
-    with st.sidebar.expander("❓ Como baixar o arquivo correto?"):
-        st.write("1. Clique no link acima.")
-        st.write("2. Na aba 'Downloads', navegue: `municipios` -> `2022` (ou mais recente) -> UF.")
-        st.write("3. Baixe o arquivo `.zip` referente ao seu Estado.")
-        st.write("4. Faça o upload aqui **sem descompactar**.")
 
 if not arquivo_planilha or not arquivo_mapa:
     st.title("🗺️ Simulador de Malha Logística")
@@ -254,8 +257,14 @@ if not arquivo_planilha or not arquivo_mapa:
 
 df_vol_raw, gdf = load_dados(arquivo_planilha, arquivo_mapa, modo_analise)
 
+# ==========================================
+# INICIALIZAÇÃO DE VARIÁVEIS DE ESTADO (CACHE)
+# ==========================================
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
+if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
+if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
+
 if 'de_para_bairros' not in st.session_state:
     if os.path.exists(ARQUIVO_DE_PARA):
         with open(ARQUIVO_DE_PARA, 'r', encoding='utf-8') as f:
@@ -290,7 +299,7 @@ df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x
 df_vol = df_vol.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Transportadora', COLUNA_CEP])['Volume'].sum().reset_index()
 
 st.sidebar.markdown("---")
-st.sidebar.title("Filtros")
+st.sidebar.title("Filtros e Configurações")
 cidades_disponiveis = sorted(df_vol['Cidade'].unique())
 cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
@@ -308,20 +317,6 @@ else: df_cidade_orig = df_cidade_full.copy()
 bairros_planilha = set(df_cidade_full['Join_Bairro'])
 bairros_ibge = set(gdf_cidade['Join_Bairro'])
 divergentes = bairros_planilha - bairros_ibge
-if divergentes:
-    with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)"):
-        bairros_planilha_vazios = df_cidade_full[df_cidade_full['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
-        bairros_ibge_vazios = gdf_cidade[~gdf_cidade['Join_Bairro'].isin(bairros_planilha)]['NM_BAIRRO_STR'].unique()
-        bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + sorted(bairros_ibge_vazios))
-        if bairro_ibge_selecionado != "-- Nenhum --":
-            sugestoes = difflib.get_close_matches(bairro_ibge_selecionado, bairros_planilha_vazios, n=5, cutoff=0.3)
-            bairro_planilha_selecionado = st.selectbox("2. Local na Planilha:", ["-- Selecione --"] + sugestoes + sorted([b for b in bairros_planilha_vazios if b not in sugestoes]))
-            if st.button("Vincular", type="primary"):
-                if bairro_planilha_selecionado != "-- Selecione --":
-                    st.session_state.de_para_bairros[bairro_planilha_selecionado] = bairro_ibge_selecionado
-                    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
-                        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
-                    st.rerun()
 
 df_cidade_sim = df_cidade_orig.copy()
 for idx, row in df_cidade_sim.iterrows():
@@ -340,11 +335,50 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
-st.sidebar.markdown("---")
 transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", transp_ativas, default=transp_ativas)
 with st.sidebar.expander("🎨 Personalizar Cores"):
     for transp in transp_ativas:
         st.session_state.cores_transp[transp] = st.color_picker(f"{transp}", st.session_state.cores_transp.get(transp, '#000000'))
+
+# ==========================================
+# NOVA SEÇÃO: ENDEREÇOS DAS BASES NA BARRA LATERAL
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🏢 Endereços das Bases (Sedes)")
+st.sidebar.caption("Insira para ativar as casinhas no mapa e habilitar a Inteligência Artificial.")
+
+with st.sidebar.expander("📍 Configurar Endereços", expanded=True if not st.session_state.coords_bases else False):
+    novos_enderecos = {}
+    for base in transp_ativas:
+        end_atual = st.session_state.enderecos_bases.get(base, "")
+        novos_enderecos[base] = st.text_input(f"Endereço: {base}", value=end_atual, placeholder="Ex: Av. Paulista, 1000, SP")
+        
+    if st.button("Buscar e Salvar Coordenadas", type="primary", use_container_width=True):
+        with st.spinner("Buscando no satélite..."):
+            erros_end = []
+            for base, end in novos_enderecos.items():
+                st.session_state.enderecos_bases[base] = end
+                if end.strip():
+                    coords = buscar_coordenadas(end.strip())
+                    if not coords and "brasil" not in end.lower():
+                        coords = buscar_coordenadas(f"{end.strip()}, Brasil")
+                    if coords:
+                        st.session_state.coords_bases[base] = coords
+                    else:
+                        erros_end.append(base)
+            if erros_end:
+                st.error(f"❌ Não achamos: {', '.join(erros_end)}")
+            else:
+                st.success("✅ Todas as bases salvas!")
+            time.sleep(1)
+            st.rerun()
+
+# ==========================================
+# GUIA VISUAL PARA EXPORTAÇÃO (PDF) NA BARRA LATERAL
+# ==========================================
+st.sidebar.markdown("---")
+st.sidebar.title("🖨️ Exportação (PDF)")
+st.sidebar.info("Para gerar o **relatório visual (PDF)** desta simulação com o mapa já formatado, basta apertar **`Ctrl + P`** (ou `Cmd + P` no Mac) no seu teclado.\n\n*Os botões e menus serão ocultados automaticamente na impressão.*")
 
 @st.cache_data
 def prepara_mapa(df):
@@ -416,28 +450,29 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
-            cor_base = st.session_state.cores_transp.get(base, '#333333')
-            html_pino = f'''
-            <div style="
-                background-color: {cor_base};
-                width: 32px;
-                height: 32px;
-                border-radius: 50%;
-                border: 2px solid white;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
-                font-size: 16px;
-            ">
-                🏠
-            </div>
-            '''
-            folium.Marker(
-                coords,
-                tooltip=f"🏢 Sede: {base}",
-                icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
-            ).add_to(m)
+            if base in transp_selecionadas_sidebar:
+                cor_base = st.session_state.cores_transp.get(base, '#333333')
+                html_pino = f'''
+                <div style="
+                    background-color: {cor_base};
+                    width: 32px;
+                    height: 32px;
+                    border-radius: 50%;
+                    border: 2px solid white;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
+                    font-size: 16px;
+                ">
+                    🏠
+                </div>
+                '''
+                folium.Marker(
+                    coords,
+                    tooltip=f"🏢 Sede: {base}",
+                    icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
+                ).add_to(m)
             
     folium_static(m, width=700, height=400)
 
@@ -469,7 +504,6 @@ with aba1:
                 st.markdown("<br>", unsafe_allow_html=True)
                 btn_aplicar_troca = st.form_submit_button("Migrar Operação", use_container_width=True, type="primary")
 
-    # MÁGICA DA CONFIRMAÇÃO DO REINÍCIO
     col_spacer, col_clear = st.columns([5, 2])
     with col_clear:
         if not st.session_state.confirmar_reiniciar:
@@ -481,7 +515,6 @@ with aba1:
             col_sim, col_nao = st.columns(2)
             if col_sim.button("✅ Sim", use_container_width=True, type="primary"):
                 st.session_state.simulacoes = {}
-                if 'coords_bases' in st.session_state: del st.session_state['coords_bases']
                 if 'ia_resultado' in st.session_state: del st.session_state['ia_resultado']
                 st.session_state.confirmar_reiniciar = False
                 st.rerun()
@@ -603,84 +636,65 @@ with aba1:
 # ==========================================
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
-    st.info("A IA encontrará as coordenadas e alocará as regiões baseadas na proximidade para atingir a meta. **Não haverá sobreposição.**")
+    st.info("A IA alocará as regiões baseadas na proximidade estrita com a base crescendo de forma radial até bater a meta alvo. **Não haverá sobreposição.**")
     
-    bases_ativas = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
+    bases_ativas_ia = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
-    if bases_ativas:
-        with st.form("form_ia_config"):
-            st.markdown("##### ⚙️ Configuração das Metas")
-            st.caption("Ajuste a proporção desejada nas barras (%) abaixo. A última base fechará os 100% automaticamente (Lógica em Cascata).")
-            
-            col_ia1, col_ia2 = st.columns(2)
-            target_vols = {}
-            enderecos = {}
-            pct_restante = 100
-            
-            for i, base in enumerate(bases_ativas):
-                with col_ia1 if i % 2 == 0 else col_ia2:
-                    st.markdown(f"**{base}**")
-                    
-                    def_end = f"Centro, {cidade_selecionada}" if cidade_selecionada != 'Visão Regional (Estado Completo)' else ""
-                    enderecos[base] = st.text_input(
-                        f"Endereço da Sede ({base})", 
-                        value="", 
-                        placeholder="Ex: Avenida Paulista, 1000, São Paulo - SP",
-                        help="Não cole o texto do Looker inteiro. Digite apenas Rua, Número, Cidade e UF para o satélite não se perder.",
-                        key=f"end_{base}"
-                    )
-                    
-                    if i < len(bases_ativas) - 1:
-                        val = st.slider(
-                            f"Volume Alvo (%)", 
-                            min_value=0, 
-                            max_value=pct_restante, 
-                            value=min(pct_restante, int(100/len(bases_ativas))), 
-                            format="%d%%",
-                            key=f"vol_{base}"
-                        )
-                        target_vols[base] = val
-                        pct_restante -= val
-                    else:
-                        target_vols[base] = pct_restante
-                        st.info(f"Volume Automático: **{pct_restante}%**")
-                    
-                    st.markdown("<hr style='margin: 10px 0;'>", unsafe_allow_html=True)
-            
-            submit_ia = st.form_submit_button("🚀 Gerar Malha Inteligente", type="primary")
+    if bases_ativas_ia:
+        # LÓGICA DE SLIDERS DINÂMICOS CONECTADOS
+        # Inicialização
+        for base in bases_ativas_ia:
+            chave_slider = f"vol_slider_{base}"
+            if chave_slider not in st.session_state:
+                st.session_state[chave_slider] = 100.0 / len(bases_ativas_ia)
+        
+        # Função Callback que recalcula os outros ao arrastar um
+        def atualiza_sliders(base_alterada, lista_bases):
+            novo_valor = st.session_state[f"vol_slider_{base_alterada}"]
+            outras_bases = [b for b in lista_bases if b != base_alterada]
+            if not outras_bases: return
+            resto = 100.0 - novo_valor
+            parcela_igual = resto / len(outras_bases)
+            for o in outras_bases:
+                st.session_state[f"vol_slider_{o}"] = parcela_igual
 
-        if submit_ia:
-            with st.spinner("Geocodificando endereços e calculando distâncias... Isso pode levar alguns segundos."):
+        st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
+        cols_ia = st.columns(2)
+        
+        for i, base in enumerate(bases_ativas_ia):
+            with cols_ia[i % 2]:
+                st.slider(
+                    f"🎯 Alvo para: **{base}**", 
+                    min_value=0.0, 
+                    max_value=100.0, 
+                    step=1.0,
+                    format="%d%%",
+                    key=f"vol_slider_{base}",
+                    on_change=atualiza_sliders,
+                    args=(base, bases_ativas_ia)
+                )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary", use_container_width=True):
+            with st.spinner("Geocodificando e calculando matriz global de distâncias..."):
                 try:
-                    coords_bases = {}
-                    erros_geo = []
-                    
-                    for base, end in enderecos.items():
-                        if not end.strip():
-                            erros_geo.append((base, "Endereço em branco"))
-                            continue
+                    # Validação de coordenadas
+                    coords_bases_ia = {}
+                    bases_sem_coords = []
+                    for base in bases_ativas_ia:
+                        if base in st.session_state.coords_bases:
+                            coords_bases_ia[base] = st.session_state.coords_bases[base]
+                        else:
+                            bases_sem_coords.append(base)
                             
-                        st.caption(f"📍 *Buscando:* {end}")
-                        
-                        coords = buscar_coordenadas(end.strip())
-                        
-                        if not coords and "brasil" not in end.lower():
-                            coords = buscar_coordenadas(f"{end.strip()}, Brasil")
-                            
-                        if coords: 
-                            coords_bases[base] = coords
-                        else: 
-                            erros_geo.append((base, end))
-                    
-                    if erros_geo:
-                        for err in erros_geo:
-                            st.error(f"❌ **Base {err[0]}:** Não foi possível encontrar a coordenada exata para o endereço ('{err[1]}').")
-                        st.info("💡 **DICA:** Não copie o endereço com barras, nomes de galpões ou traços do Looker. Digite de forma limpa: **Rua, Número, Cidade - UF**.")
+                    if bases_sem_coords:
+                        st.error(f"❌ Faltam coordenadas para: {', '.join(bases_sem_coords)}")
+                        st.info("💡 Volte na barra lateral e preencha os endereços antes de rodar a IA.")
                         st.stop()
                     
                     total_volume_cidade = df_cidade_orig['Volume'].sum()
-                    volume_alvo = {b: total_volume_cidade * (pct/100) for b, pct in target_vols.items()}
-                    volume_atual = {b: 0 for b in bases_ativas}
+                    volume_alvo_pacotes = {b: total_volume_cidade * (st.session_state[f"vol_slider_{b}"]/100.0) for b in bases_ativas_ia}
+                    volume_atual = {b: 0 for b in bases_ativas_ia}
                     
                     bairros_unicos = {}
                     for _, row in gdf_cidade.iterrows():
@@ -693,43 +707,53 @@ with aba2:
                                 bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())
-                    bairros_info.sort(key=lambda x: x['Vol'], reverse=True) 
-
-                    alocacao_ia = {}
+                    
+                    # O SEGREDO DO CRESCIMENTO RADIAL: Uma única lista de distâncias ordenada do menor para o maior!
+                    matriz_distancias = []
                     for b_info in bairros_info:
-                        distancias = {base: geodesic((b_info['lat'], b_info['lon']), coords_bases[base]).km for base in bases_ativas}
-                        bases_ordenadas = sorted(distancias.keys(), key=lambda k: distancias[k])
-                        
-                        alocada = False
-                        base_escolhida = bases_ordenadas[0]
-                        
-                        for base_proxima in bases_ordenadas:
-                            if volume_atual[base_proxima] + b_info['Vol'] <= volume_alvo[base_proxima] * 1.20: 
-                                base_escolhida = base_proxima
-                                volume_atual[base_proxima] += b_info['Vol']
-                                alocada = True
-                                break
-                                
-                        if not alocada:
-                            base_escolhida = max(bases_ativas, key=lambda b: volume_alvo[b] - volume_atual[b])
-                            volume_atual[base_escolhida] += b_info['Vol']
+                        for base in bases_ativas_ia:
+                            dist = geodesic((b_info['lat'], b_info['lon']), coords_bases_ia[base]).meters
+                            matriz_distancias.append((dist, b_info['Join_Bairro'], base, b_info['Vol']))
                             
-                        bairros_variacoes = df_cidade_orig[df_cidade_orig['Join_Bairro'] == b_info['Join_Bairro']]['Bairro'].unique()
+                    # Ordena rigidamente pelas áreas coladas nas bases (menor distância primeiro)
+                    matriz_distancias.sort(key=lambda x: x[0])
+                    
+                    alocacao_ia = {}
+                    for dist, b_id, base, vol in matriz_distancias:
+                        if b_id in alocacao_ia: continue # Se o bairro já ganhou dono, pula
+                        
+                        # Se couber na cota, a base puxa pra ela
+                        if volume_atual[base] + vol <= volume_alvo_pacotes[base]:
+                            alocacao_ia[b_id] = base
+                            volume_atual[base] += vol
+                            
+                    # Trata a "Rebarba" (O que não coube perfeitamente na cota de ninguém)
+                    bairros_sem_dono = [b['Join_Bairro'] for b in bairros_info if b['Join_Bairro'] not in alocacao_ia]
+                    for b_id in bairros_sem_dono:
+                        info = bairros_unicos[b_id]
+                        # Força para a base mais próxima possível, ignorando o teto
+                        base_mais_proxima = min(bases_ativas_ia, key=lambda b: geodesic((info['lat'], info['lon']), coords_bases_ia[b]).meters)
+                        alocacao_ia[b_id] = base_mais_proxima
+                        
+                    # Desdobra os "Join_Bairros" para garantir a conversão final
+                    alocacao_final = {}
+                    for b_id, base in alocacao_ia.items():
+                        bairros_variacoes = df_cidade_orig[df_cidade_orig['Join_Bairro'] == b_id]['Bairro'].unique()
                         for bv in bairros_variacoes:
-                            alocacao_ia[bv] = base_escolhida
-                            
-                    for b in df_cidade_full['Bairro'].unique():
-                        if b not in alocacao_ia:
-                            alocacao_ia[b] = bases_ativas[0]
+                            alocacao_final[bv] = base
 
-                    st.session_state.ia_resultado = alocacao_ia
-                    st.session_state.coords_bases = coords_bases
+                    # Blindagem final
+                    for b in df_cidade_full['Bairro'].unique():
+                        if b not in alocacao_final:
+                            alocacao_final[b] = bases_ativas_ia[0]
+
+                    st.session_state.ia_resultado = alocacao_final
                     st.toast("✅ Malha Inteligente gerada com sucesso!")
                     
                 except Exception as e:
                     st.error(f"Erro na geração da IA: {e}")
 
-        if 'ia_resultado' in st.session_state and 'coords_bases' in st.session_state:
+        if 'ia_resultado' in st.session_state:
             st.markdown("---")
             st.markdown("### 🗺️ Cenário Proposto pela IA")
             
@@ -743,8 +767,8 @@ with aba2:
                 if row['Bairro'] in st.session_state.ia_resultado:
                     df_cidade_ia.at[idx, 'Transportadora'] = st.session_state.ia_resultado[row['Bairro']]
                 else:
-                    df_cidade_ia.at[idx, 'Transportadora'] = bases_ativas[0]
-                    st.session_state.ia_resultado[row['Bairro']] = bases_ativas[0]
+                    df_cidade_ia.at[idx, 'Transportadora'] = bases_ativas_ia[0]
+                    st.session_state.ia_resultado[row['Bairro']] = bases_ativas_ia[0]
                     
             df_mapa_ia_agg = prepara_mapa(df_cidade_ia)
             df_mapa_ia_agg['Transportadora_Mapa'] = df_mapa_ia_agg['Parceiros'].apply(lambda x: x.split(' + ')[0])
@@ -753,10 +777,10 @@ with aba2:
             
             col_ia_m, col_ia_t = st.columns([2, 1])
             with col_ia_m:
-                desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.coords_bases)
+                desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
                 
-                bases_ativas_ia = sorted(df_cidade_ia['Transportadora'].unique())
-                t_ia_legenda = [t for t in bases_ativas_ia if t in transp_selecionadas_sidebar]
+                bases_ativas_mapa_ia = sorted(df_cidade_ia['Transportadora'].unique())
+                t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
                 gerar_legenda(t_ia_legenda)
                 
@@ -844,5 +868,34 @@ with aba3:
                 
                 df_range_ia = gerar_ranges_cep(df_oficial_ia)
                 st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
+                
+            # ---------------------------------------------------------
+            # MÓDULO DE DOWNLOAD EXCEL COM MULTIPLAS ABAS
+            # ---------------------------------------------------------
+            st.markdown("---")
+            st.markdown("### 📥 Exportar Resultados da Simulação")
+            st.write("Baixe o consolidado de todas as tabelas, volumetrias e ranges de CEP para o seu computador.")
+
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                # Dados Volumétricos
+                gerar_tabela(df_cidade_orig).to_excel(writer, sheet_name='Volume_Atual', index=False)
+                gerar_tabela(df_cidade_sim).to_excel(writer, sheet_name='Volume_Simulado', index=False)
+                
+                # Dados de CEP
+                df_range_orig.to_excel(writer, sheet_name='CEPs_Atual', index=False)
+                df_range_sim.to_excel(writer, sheet_name='CEPs_Simulado', index=False)
+                
+                if 'df_range_ia' in locals():
+                    df_range_ia.to_excel(writer, sheet_name='CEPs_IA', index=False)
+
+            st.download_button(
+                label="📊 Baixar Relatório Completo (Excel)",
+                data=buffer.getvalue(),
+                file_name=f"Relatorio_Malha_{limpa_texto(cidade_selecionada)}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+            
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")

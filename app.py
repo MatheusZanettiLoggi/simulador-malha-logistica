@@ -11,6 +11,7 @@ import os
 import re
 import time
 import io
+import random
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 
@@ -114,20 +115,36 @@ def gerar_ranges_cep(df_cidade):
 # ==========================================
 # FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
 # ==========================================
-# Removido o st.cache_data para evitar que erros de satélite fiquem presos na memória!
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
     
-    # Auto-corretor: Substitui o traço de estado por vírgula para ajudar o satélite
     endereco_formatado = endereco_busca.replace(" - ", ", ")
     
+    # Agente dinâmico para evitar bloqueios temporários na nuvem
+    user_agent_dinamico = f"simulador_malha_logistica_req_{random.randint(10000, 99999)}"
+    
     try:
-        geolocator = Nominatim(user_agent="simulador_malha_logistica_v5")
+        geolocator = Nominatim(user_agent=user_agent_dinamico)
+        
+        # TENTATIVA 1: Busca exata
         location = geolocator.geocode(endereco_formatado, timeout=15)
-        if location:
-            return (location.latitude, location.longitude)
-    except Exception:
-        pass
+        if location: return (location.latitude, location.longitude)
+        
+        # TENTATIVA 2: Forçando o país
+        if "brasil" not in endereco_formatado.lower():
+            location = geolocator.geocode(f"{endereco_formatado}, Brasil", timeout=15)
+            if location: return (location.latitude, location.longitude)
+            
+        # TENTATIVA 3 (MÁGICA): Removendo o número da rua
+        # O OSM falha se o número exato da casa não existir. Se tirarmos o número, ele acha a rua.
+        end_sem_num = re.sub(r',\s*\d+', '', endereco_formatado)
+        if end_sem_num != endereco_formatado:
+            location = geolocator.geocode(f"{end_sem_num}, Brasil", timeout=15)
+            if location: return (location.latitude, location.longitude)
+            
+    except Exception as e:
+        pass # Falha silenciosa para não quebrar o app
+        
     return None
 
 def descobrir_uf_pelo_cep(cep_str):
@@ -376,11 +393,9 @@ if bases_sem_coord:
                     erros.append(base)
                     continue
                 
-                # Otimização: Só busca no satélite se for uma base nova ou se o usuário mudou o texto
+                # Só busca no satélite se for uma base nova ou se o usuário mudou o texto
                 if base not in st.session_state.coords_bases or st.session_state.enderecos_bases.get(base) != end:
                     c = buscar_coordenadas(end.strip())
-                    if not c and "brasil" not in end.lower():
-                        c = buscar_coordenadas(f"{end.strip()}, Brasil")
                     if c:
                         st.session_state.coords_bases[base] = c
                         st.session_state.enderecos_bases[base] = end

@@ -114,12 +114,16 @@ def gerar_ranges_cep(df_cidade):
 # ==========================================
 # FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
 # ==========================================
-@st.cache_data(show_spinner=False)
+# Removido o st.cache_data para evitar que erros de satélite fiquem presos na memória!
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
+    
+    # Auto-corretor: Substitui o traço de estado por vírgula para ajudar o satélite
+    endereco_formatado = endereco_busca.replace(" - ", ", ")
+    
     try:
-        geolocator = Nominatim(user_agent="simulador_malha_logistica_v4")
-        location = geolocator.geocode(endereco_busca, timeout=15)
+        geolocator = Nominatim(user_agent="simulador_malha_logistica_v5")
+        location = geolocator.geocode(endereco_formatado, timeout=15)
         if location:
             return (location.latitude, location.longitude)
     except Exception:

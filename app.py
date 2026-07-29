@@ -167,8 +167,23 @@ def gerar_ranges_cep(df_cidade):
     df_valid = df_cidade[df_cidade['Transportadora'] != TAG_MISSORTING]
     df_range = df_valid.groupby(['Transportadora', 'Estado', 'Municipio', 'Bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
     df_range.columns = ['Transportadora', 'Estado', 'Município', 'Bairro', 'CEP Inicial', 'CEP Final']
+    
+    # --- NOVA LÓGICA DE PREENCHIMENTO DE CEP (FECHAR BURACOS DE CAIXA POSTAL) ---
+    def fechar_buraco_cep(cep_final):
+        cep_str = re.sub(r'\D', '', str(cep_final)).zfill(8)
+        try:
+            sufixo = int(cep_str[-3:])
+            # Se o maior CEP da rua terminar entre 800 e 998, estendemos para 999
+            # para cobrir Caixas Postais e Grandes Usuários (Padrão Correios)
+            if 800 <= sufixo <= 998:
+                return cep_str[:-3] + '999'
+        except:
+            pass
+        return cep_str
+
     df_range['CEP Inicial'] = df_range['CEP Inicial'].apply(formatar_cep)
-    df_range['CEP Final'] = df_range['CEP Final'].apply(formatar_cep)
+    df_range['CEP Final'] = df_range['CEP Final'].apply(fechar_buraco_cep).apply(formatar_cep)
+    
     return df_range.sort_values(['Transportadora', 'CEP Inicial'])
 
 # ==========================================

@@ -245,7 +245,7 @@ def load_dados(excel_file, zip_file, modo):
     col_routing = 'Package Planned DC Routing Code'
     
     # ---------------------------------------------------------
-    # FILTRO ESTrito DE LIMPEZA E MISSORTING (Lixo de Sistema)
+    # FILTRO ESTRITO DE LIMPEZA E MISSORTING (Lixo de Sistema)
     # ---------------------------------------------------------
     if col_company in df.columns:
         df = df[df[col_company].notna()]
@@ -412,7 +412,7 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
+# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO (BOTÃO X)
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -420,37 +420,58 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
     st.info("Para liberar o dashboard interativo, insira o endereço de cada base operacional atuante neste cenário. Se preferir, cole diretamente a Latitude e Longitude (ex: `-22.9068, -43.1729`).")
     
-    with st.form("form_enderecos_globais"):
-        novos_enderecos = {}
-        cols = st.columns(2)
-        idx_col = 0
-        for base in transp_ativas:
-            if base == TAG_MISSORTING: continue
-            with cols[idx_col % 2]:
-                st.markdown(f"**🏢 {base}**")
-                val_atual = st.session_state.enderecos_bases.get(base, "")
-                end = st.text_input(f"Endereço_{base}", value=val_atual, placeholder="Ex: Av. Paulista, 1000 ou -23.55, -46.63", label_visibility="collapsed")
-                ignorar = st.checkbox("❌ Remover da análise (Missorting / Outro Estado)", key=f"ignorar_init_{base}")
-                if not ignorar:
-                    novos_enderecos[base] = end
+    # Criando um layout grid dinâmico (sem st.form para permitir ações de botões independentes)
+    novos_enderecos = {}
+    cols = st.columns(2)
+    idx_col = 0
+    
+    for base in transp_ativas:
+        if base == TAG_MISSORTING: continue
+        
+        with cols[idx_col % 2]:
+            st.markdown(f"**🏢 Sede: {base}**")
+            
+            # Inicializa a memória do texto para não perder enquanto digita outros
+            if f"input_end_{base}" not in st.session_state:
+                st.session_state[f"input_end_{base}"] = st.session_state.enderecos_bases.get(base, "")
+            
+            # Verifica se o usuário clicou no botão "X"
+            if st.session_state.get(f"confirm_remove_{base}", False):
+                st.warning(f"Remover '{base}' da análise?")
+                c_y, c_n = st.columns(2)
+                if c_y.button("✅ Sim", key=f"yes_{base}", use_container_width=True):
+                    st.session_state.bases_ignoradas.append(base)
+                    st.session_state[f"confirm_remove_{base}"] = False
+                    st.rerun()
+                if c_n.button("❌ Não", key=f"no_{base}", use_container_width=True):
+                    st.session_state[f"confirm_remove_{base}"] = False
+                    st.rerun()
+            else:
+                c_input, c_btn = st.columns([0.85, 0.15])
+                with c_input:
+                    novos_enderecos[base] = st.text_input(
+                        f"Endereço_{base}", 
+                        value=st.session_state[f"input_end_{base}"],
+                        key=f"input_end_{base}",
+                        placeholder="Ex: Av. Paulista, 1000 ou -23.55, -46.63", 
+                        label_visibility="collapsed"
+                    )
+                with c_btn:
+                    if st.button("❌", key=f"btn_remove_{base}", help="Remover esta base (Missorting/Outro Estado)"):
+                        st.session_state[f"confirm_remove_{base}"] = True
+                        st.rerun()
+            
+            st.markdown("<br>", unsafe_allow_html=True)
             idx_col += 1
             
-        st.markdown("<br>", unsafe_allow_html=True)
-        submit_enderecos = st.form_submit_button("Localizar Bases e Iniciar Simulador 🚀", type="primary")
+    st.markdown("<br>", unsafe_allow_html=True)
+    submit_enderecos = st.button("Localizar Bases e Iniciar Simulador 🚀", type="primary", use_container_width=True)
         
     if submit_enderecos:
-        with st.spinner("Processando..."):
-            # Atualiza lista de bases ignoradas
-            bases_para_ignorar = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_init_{b}")]
-            if bases_para_ignorar:
-                for b in bases_para_ignorar:
-                    if b not in st.session_state.bases_ignoradas:
-                        st.session_state.bases_ignoradas.append(b)
-                # Como a lista de ativas mudou, forçamos um rerun imediato para limpar a memória
-                st.rerun()
-
+        with st.spinner("Analisando coordenadas..."):
             erros = []
-            for base, end in novos_enderecos.items():
+            for base in novos_enderecos:
+                end = st.session_state[f"input_end_{base}"]
                 if not end.strip():
                     erros.append(base)
                     continue

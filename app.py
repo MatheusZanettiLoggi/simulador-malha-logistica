@@ -16,10 +16,8 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
 
-# 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
-# INJEÇÃO DE CSS PARA MODO IMPRESSÃO E AJUSTES DE INTERFACE
 st.markdown("""
     <style>
     @media print {
@@ -37,9 +35,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# VARIÁVEIS GLOBAIS E FUNÇÕES CORE
-# ==========================================
 COLUNA_CEP = 'Package ZIP'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
 TAG_MISSORTING = 'Remover da análise - Missorting'
@@ -172,13 +167,13 @@ def gerar_ranges_cep(df_cidade, dict_limites=None, is_regional=False):
     df_range = df_valid.groupby(['Transportadora', 'Estado', 'Municipio', 'Bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
     
     if is_regional:
-        # Renomeia para as colunas baseadas na visão urbana
+        # Define the exact 4 columns requested for regional mode
         df_range.columns = ['Transportadora', 'Estado', 'Município', 'Bairro', 'CEP Inicial (Sede Urbana / e-DNE)', 'CEP Final (Sede Urbana / e-DNE)']
         
         df_range['CEP Inicial (Sede Urbana / e-DNE)'] = df_range['CEP Inicial (Sede Urbana / e-DNE)'].apply(formatar_cep)
         df_range['CEP Final (Sede Urbana / e-DNE)'] = df_range['CEP Final (Sede Urbana / e-DNE)'].apply(formatar_cep)
         
-        # Gera o range final completo, fechando a zona administrativa inteira até o final
+        # Total range starts with the same initial zip code
         df_range['CEP Inicial (Total Município)'] = df_range['CEP Inicial (Sede Urbana / e-DNE)']
         
         if dict_limites:
@@ -196,9 +191,6 @@ def gerar_ranges_cep(df_cidade, dict_limites=None, is_regional=False):
         df_range['CEP Final'] = df_range['CEP Final'].apply(fechar_buraco_cep).apply(formatar_cep)
         return df_range.sort_values(['Transportadora', 'CEP Inicial'])
 
-# ==========================================
-# FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
-# ==========================================
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
     endereco_formatado = endereco_busca.replace(" - ", ", ")
@@ -315,9 +307,6 @@ def load_dados(excel_file, zip_file, modo):
         
     return df_vol, gdf
 
-# ==========================================
-# FLUXO DA TELA INICIAL (LANDING PAGE & BACKUP)
-# ==========================================
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'
 
@@ -390,9 +379,6 @@ elif st.session_state.app_mode == 'load':
         st.rerun()
     st.stop()
 
-# ==========================================
-# BARRA LATERAL E INJEÇÃO DOS DADOS
-# ==========================================
 st.sidebar.title("⚙️ Modo de Operação")
 
 if st.session_state.get('is_loaded_from_backup', False):
@@ -443,7 +429,6 @@ excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
 map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
 df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
-# DEFINIÇÃO SEGURA DOS RÓTULOS
 lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
@@ -505,7 +490,6 @@ df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.sessio
 bairros_planilha = set(df_cidade_orig['Join_Bairro'])
 bairros_ibge = set(gdf_cidade['Join_Bairro'])
 divergentes = bairros_planilha - bairros_ibge
-
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)"):
         bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
@@ -537,9 +521,6 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
-# ==========================================
-# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO E FOCALIZADOR
-# ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
 if bases_sem_coord or st.session_state.erros_geocoding:
@@ -690,9 +671,6 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     st.stop()
 
-# ==========================================
-# PAINEL DE EDIÇÃO NA BARRA LATERAL E RODAPÉ
-# ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
     st.caption("Corrija endereços, insira coordenadas (lat, lon) ou restaure bases removidas da análise.")
@@ -743,7 +721,6 @@ st.sidebar.markdown("---")
 st.sidebar.title("🖨️ Exportação (PDF)")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).\n\n*Os menus serão ocultados e a página ajustada automaticamente.*")
 
-# Assinatura Profissional
 st.sidebar.markdown(
     '''
     <div style="text-align: center; color: #888; font-size: 13px; margin-top: 30px;">
@@ -786,9 +763,6 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m.loc[mask, 'Transportadora_Mapa'] = 'Oculto'
     return gdf_m
 
-# ==========================================
-# ESTRUTURA VISUAL: CABEÇALHO E BOTÃO DE SAVE
-# ==========================================
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
@@ -916,9 +890,6 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
-# ==========================================
-# ABA 1: Simulador Manual
-# ==========================================
 with aba1:
     st.markdown("### 📍 Cenário Atual")
     col_m1, col_t1 = st.columns([3, 1])
@@ -1065,9 +1036,6 @@ with aba1:
             st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
 
-# ==========================================
-# ABA 2: Inteligência Artificial
-# ==========================================
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
     st.info("A IA alocará as regiões baseadas na proximidade estrita com a base, crescendo de forma radial até bater a meta de pacotes alvo. **Não haverá sobreposição.**")
@@ -1214,9 +1182,6 @@ with aba2:
                     st.markdown(f"**Detalhamento por {lbl_local}**")
                     st.dataframe(gerar_tabela_detalhada(df_cidade_ia, lbl_local), use_container_width=True, hide_index=True)
 
-# ==========================================
-# ABA 3: Exportação e Ranges de CEP OFICIAIS
-# ==========================================
 with aba3:
     st.markdown("### 🗃️ Extração de Ranges de CEP por Base")
     st.write("Mapeamento automático dos CEPs reais da região selecionada para as transportadoras configuradas nas simulações.")
@@ -1303,8 +1268,8 @@ with aba3:
             df_oficial_orig['Transportadora'] = df_oficial_orig[chave_oficial].map(map_atual).fillna('Sem Atendimento')
             if is_regional: df_oficial_orig = df_oficial_orig[df_oficial_orig['Transportadora'] != 'Sem Atendimento']
             
-            # --- DEFININDO A ORDEM DE COLUNAS FORÇADA AQUI ---
             df_range_orig = gerar_ranges_cep(df_oficial_orig, dict_limites=limites_expandidos, is_regional=is_regional)
+            # CRÍTICO: Exibir explicitamente as colunas na interface do Streamlit
             if is_regional:
                 st.dataframe(df_range_orig[['Transportadora', 'Estado', 'Município', 'Bairro', 'CEP Inicial (Sede Urbana / e-DNE)', 'CEP Final (Sede Urbana / e-DNE)', 'CEP Inicial (Total Município)', 'CEP Final (Total Município)']], use_container_width=True, hide_index=True)
             else:

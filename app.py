@@ -233,12 +233,32 @@ lbl_locais = "Municípios" if modo_analise == "🗺️ Regional (Por Cidades)" e
 
 st.sidebar.divider()
 st.sidebar.title("📁 Importação de Dados")
+
+st.sidebar.markdown("**1. Planilha de Volumetria**")
+st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
+st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26291)")
 arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
 
+st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
+
 if modo_analise == "🏙️ Intra-Município (Por Bairros)":
+    st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
+    st.sidebar.markdown("[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Bairros (ZIP)", type=['zip'], key="up_bairro")
+    with st.sidebar.expander("❓ Como baixar o arquivo correto?"):
+        st.write("1. Clique no link acima.")
+        st.write("2. Clique na pasta correspondente ao seu Estado (ex: RJ).")
+        st.write("3. Baixe o arquivo `.zip` final.")
+        st.write("4. Faça o upload aqui **sem descompactar**.")
 else:
+    st.sidebar.caption("Para migrações de malha entre bases, precisamos do mapa de Municípios.")
+    st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
+    with st.sidebar.expander("❓ Como baixar o arquivo correto?"):
+        st.write("1. Clique no link acima.")
+        st.write("2. Na aba 'Downloads', navegue: `municipios` -> `2022` (ou mais recente) -> UF.")
+        st.write("3. Baixe o arquivo `.zip` referente ao seu Estado.")
+        st.write("4. Faça o upload aqui **sem descompactar**.")
 
 if not arquivo_planilha or not arquivo_mapa:
     st.title("🗺️ Simulador de Malha Logística")
@@ -331,7 +351,7 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# NOVO REQUISITO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL
+# NOVO REQUISITO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL (REORDENADO)
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases]
 
@@ -339,25 +359,6 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
     st.info("Para liberar o dashboard interativo, insira o endereço de cada base operacional atuante neste cenário. Se preferir, cole diretamente a Latitude e Longitude (ex: `-22.9068, -43.1729`).")
     
-    # Renderiza um mapa auxiliar para pegar a coordenada via clique
-    st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
-    st.write("Não sabe o endereço exato ou o satélite falhou? Navegue no mapa abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente!")
-    
-    cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
-    cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
-    
-    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=11, tiles="CartoDB dark_matter")
-    # Desenha apenas a silhueta da cidade/bairros para ajudar na localização
-    folium.GeoJson(gdf_cidade, style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5}).add_to(m_helper)
-    
-    map_data = st_folium(m_helper, height=350, width=800)
-    
-    if map_data and map_data.get("last_clicked"):
-        lat_c = map_data["last_clicked"]["lat"]
-        lng_c = map_data["last_clicked"]["lng"]
-        st.success(f"📍 **Coordenada Capturada:** `{lat_c}, {lng_c}` (Copie e cole abaixo)")
-    
-    st.markdown("---")
     with st.form("form_enderecos_globais"):
         novos_enderecos = {}
         cols = st.columns(2)
@@ -403,14 +404,35 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     # PLANO C: Botão de Pânico
     if st.session_state.erros_geocoding:
-        st.warning("⚠️ Bloqueio do Satélite detectado. Copie as coordenadas clicando no mapa acima, ou clique abaixo para pular temporariamente.")
+        st.warning("⚠️ Bloqueio do Satélite detectado. Copie as coordenadas clicando no mapa abaixo, ou clique abaixo para pular temporariamente.")
         if st.button("🚨 Usar o Centro da Região para as bases com erro e Continuar"):
+            cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
+            cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
             for b_err in st.session_state.erros_geocoding:
                 st.session_state.coords_bases[b_err] = (cy_helper, cx_helper)
                 st.session_state.enderecos_bases[b_err] = "Centro da Região (Fallback)"
             st.session_state.erros_geocoding = []
             st.rerun()
             
+    # Renderiza um mapa auxiliar para pegar a coordenada via clique (Abaixo do formulário)
+    st.markdown("---")
+    st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
+    st.write("Não sabe o endereço exato ou o satélite falhou? Navegue no mapa abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente acima!")
+    
+    cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
+    cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
+    
+    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=11, tiles="CartoDB dark_matter")
+    # Desenha apenas a silhueta da cidade/bairros para ajudar na localização
+    folium.GeoJson(gdf_cidade, style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5}).add_to(m_helper)
+    
+    map_data = st_folium(m_helper, height=350, width=800)
+    
+    if map_data and map_data.get("last_clicked"):
+        lat_c = map_data["last_clicked"]["lat"]
+        lng_c = map_data["last_clicked"]["lng"]
+        st.success(f"📍 **Coordenada Capturada:** `{lat_c}, {lng_c}` (Copie e cole na caixa da base)")
+
     st.stop() # Bloqueia o carregamento do app até resolver os endereços
 
 # ==========================================

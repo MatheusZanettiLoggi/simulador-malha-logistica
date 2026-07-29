@@ -244,9 +244,7 @@ def load_dados(excel_file, zip_file, modo):
     col_company = 'Package Last Mile Company Name'
     col_routing = 'Package Planned DC Routing Code'
     
-    # ---------------------------------------------------------
-    # FILTRO ESTRITO DE LIMPEZA E MISSORTING (Lixo de Sistema)
-    # ---------------------------------------------------------
+    # FILTRO DE LIMPEZA E MISSORTING ESTRUTURAL
     if col_company in df.columns:
         df = df[df[col_company].notna()]
         df = df[~df[col_company].astype(str).str.lower().isin(['nan', 'null', 'none', ''])]
@@ -287,7 +285,25 @@ def load_dados(excel_file, zip_file, modo):
     return df_vol, gdf
 
 # ==========================================
-# BARRA LATERAL E CARGA
+# INICIALIZAÇÃO DE ESTADO
+# ==========================================
+if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
+if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
+if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
+if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
+if 'erros_geocoding' not in st.session_state: st.session_state.erros_geocoding = []
+if 'bases_ignoradas' not in st.session_state: st.session_state.bases_ignoradas = []
+if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
+
+if 'de_para_bairros' not in st.session_state:
+    if os.path.exists(ARQUIVO_DE_PARA):
+        with open(ARQUIVO_DE_PARA, 'r', encoding='utf-8') as f:
+            st.session_state.de_para_bairros = json.load(f)
+    else:
+        st.session_state.de_para_bairros = {}
+
+# ==========================================
+# BARRA LATERAL (MENU)
 # ==========================================
 st.sidebar.title("⚙️ Modo de Operação")
 modo_analise = st.sidebar.radio("Selecione o nível de granularidade:", options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"])
@@ -313,31 +329,41 @@ else:
     st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
 
+# --- NOVO MÓDULO DE SAVE / LOAD NA BARRA LATERAL ---
+st.sidebar.divider()
+st.sidebar.title("💾 Salvar / Carregar Sessão")
+st.sidebar.info("Para não perder seu trabalho ao fechar o navegador, salve o progresso e carregue depois.")
+
+# Lógica de Load (Upload do Json)
+uploaded_session = st.sidebar.file_uploader("Carregar Sessão (.json)", type=['json'])
+if uploaded_session is not None:
+    if st.sidebar.button("Restaurar Sessão", use_container_width=True):
+        try:
+            saved_state = json.load(uploaded_session)
+            st.session_state.simulacoes = saved_state.get('simulacoes', {})
+            # Converte as coordenadas salvas como array para tuplas
+            st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
+            st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
+            st.session_state.bases_ignoradas = saved_state.get('bases_ignoradas', [])
+            st.session_state.cores_transp = saved_state.get('cores_transp', {})
+            st.session_state.ia_resultado = saved_state.get('ia_resultado', {})
+            st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
+            st.toast("✅ Sessão restaurada com sucesso!")
+            time.sleep(1)
+            st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Erro ao ler arquivo: {e}")
+
 if not arquivo_planilha or not arquivo_mapa:
     st.title("🗺️ Simulador de Malha Logística")
     st.info("👈 Por favor, utilize a barra lateral para definir o modo de operação e importar os dados necessários.")
     st.stop()
 
+# ==========================================
+# PROCESSAMENTO DOS DADOS (PÓS UPLOAD)
+# ==========================================
 df_vol_raw, gdf = load_dados(arquivo_planilha, arquivo_mapa, modo_analise)
 
-# Inicialização do Cache
-if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
-if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
-if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
-if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
-if 'erros_geocoding' not in st.session_state: st.session_state.erros_geocoding = []
-if 'bases_ignoradas' not in st.session_state: st.session_state.bases_ignoradas = []
-
-if 'de_para_bairros' not in st.session_state:
-    if os.path.exists(ARQUIVO_DE_PARA):
-        with open(ARQUIVO_DE_PARA, 'r', encoding='utf-8') as f:
-            st.session_state.de_para_bairros = json.load(f)
-    else:
-        st.session_state.de_para_bairros = {}
-
-if 'cores_transp' not in st.session_state:
-    st.session_state.cores_transp = {}
-    
 cores_padrao = ['#9b59b6', '#e67e22', '#3498db', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#ff9ff3', '#00cec9', '#fdcb6e']
 todas_transp = sorted(df_vol_raw['Transportadora'].unique())
 for i, transp in enumerate(todas_transp):
@@ -356,10 +382,11 @@ df_vol['Bairro'] = df_vol['Bairro'].astype(str).str.title()
 df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x.mode()[0] if not x.empty else x)
 df_vol = df_vol.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Transportadora', COLUNA_CEP])['Volume'].sum().reset_index()
 
-st.sidebar.markdown("---")
-st.sidebar.title("Filtros e Configurações")
 cidades_disponiveis = sorted(df_vol['Cidade'].unique())
 cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
+
+st.sidebar.markdown("---")
+st.sidebar.title("Filtros e Configurações")
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
 df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
@@ -372,9 +399,7 @@ bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, def
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
 else: df_cidade_orig = df_cidade_full.copy()
 
-# ==========================================
-# APLICAÇÃO DA LISTA NEGRA (BASES IGNORADAS)
-# ==========================================
+# APLICAÇÃO DA LISTA NEGRA
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
 bairros_planilha = set(df_cidade_orig['Join_Bairro'])
@@ -411,8 +436,27 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
+# Lógica de Botão de Salvar (agora que transp_ativas está montado)
+state_to_save = {
+    'simulacoes': st.session_state.get('simulacoes', {}),
+    'coords_bases': st.session_state.get('coords_bases', {}),
+    'enderecos_bases': st.session_state.get('enderecos_bases', {}),
+    'bases_ignoradas': st.session_state.get('bases_ignoradas', []),
+    'cores_transp': st.session_state.get('cores_transp', {}),
+    'ia_resultado': st.session_state.get('ia_resultado', {}),
+    'de_para_bairros': st.session_state.get('de_para_bairros', {})
+}
+json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
+st.sidebar.download_button(
+    label="💾 Salvar Estado da Análise (.json)",
+    data=json_string,
+    file_name=f"Sessao_Malha_{limpa_texto(cidade_selecionada)}.json",
+    mime="application/json",
+    use_container_width=True
+)
+
 # ==========================================
-# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO (BOTÃO X)
+# ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -420,22 +464,17 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
     st.info("Para liberar o dashboard interativo, insira o endereço de cada base operacional atuante neste cenário. Se preferir, cole diretamente a Latitude e Longitude (ex: `-22.9068, -43.1729`).")
     
-    # Criando um layout grid dinâmico (sem st.form para permitir ações de botões independentes)
     novos_enderecos = {}
     cols = st.columns(2)
     idx_col = 0
     
     for base in transp_ativas:
         if base == TAG_MISSORTING: continue
-        
         with cols[idx_col % 2]:
             st.markdown(f"**🏢 Sede: {base}**")
-            
-            # Inicializa a memória do texto para não perder enquanto digita outros
             if f"input_end_{base}" not in st.session_state:
                 st.session_state[f"input_end_{base}"] = st.session_state.enderecos_bases.get(base, "")
             
-            # Verifica se o usuário clicou no botão "X"
             if st.session_state.get(f"confirm_remove_{base}", False):
                 st.warning(f"Remover '{base}' da análise?")
                 c_y, c_n = st.columns(2)
@@ -460,7 +499,6 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     if st.button("❌", key=f"btn_remove_{base}", help="Remover esta base (Missorting/Outro Estado)"):
                         st.session_state[f"confirm_remove_{base}"] = True
                         st.rerun()
-            
             st.markdown("<br>", unsafe_allow_html=True)
             idx_col += 1
             
@@ -530,7 +568,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.stop()
 
 # ==========================================
-# PAINEL DE EDIÇÃO FÁCIL NA BARRA LATERAL
+# PAINEL DE EDIÇÃO NA BARRA LATERAL (PÓS BLOQUEIO)
 # ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
@@ -625,7 +663,7 @@ def merge_geo(gdf_cid, df_agg):
     return gdf_m
 
 # ==========================================
-# ESTRUTURA VISUAL
+# ESTRUTURA VISUAL: ABAS
 # ==========================================
 titulo_app = cidade_selecionada if modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 st.title(f"Planejamento de Malha: {titulo_app}")

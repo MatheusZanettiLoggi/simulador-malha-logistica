@@ -3,7 +3,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 import geopandas as gpd
 import folium
-from streamlit_folium import folium_static
+from streamlit_folium import folium_static, st_folium
 import unicodedata
 import difflib
 import json
@@ -331,14 +331,33 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# NOVO REQUISITO: ENDEREÇOS COM PLANO B E C
+# NOVO REQUISITO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases]
 
 if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
-    st.info("Para liberar o dashboard, insira o endereço de cada base operacional atuante neste cenário.\n\n💡 **Dica (Plano B):** Se o satélite não achar a rua, cole diretamente a Latitude e Longitude (ex: `-22.9068, -43.1729`).")
+    st.info("Para liberar o dashboard interativo, insira o endereço de cada base operacional atuante neste cenário. Se preferir, cole diretamente a Latitude e Longitude (ex: `-22.9068, -43.1729`).")
     
+    # Renderiza um mapa auxiliar para pegar a coordenada via clique
+    st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
+    st.write("Não sabe o endereço exato ou o satélite falhou? Navegue no mapa abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente!")
+    
+    cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
+    cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
+    
+    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=11, tiles="CartoDB dark_matter")
+    # Desenha apenas a silhueta da cidade/bairros para ajudar na localização
+    folium.GeoJson(gdf_cidade, style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5}).add_to(m_helper)
+    
+    map_data = st_folium(m_helper, height=350, width=800)
+    
+    if map_data and map_data.get("last_clicked"):
+        lat_c = map_data["last_clicked"]["lat"]
+        lng_c = map_data["last_clicked"]["lng"]
+        st.success(f"📍 **Coordenada Capturada:** `{lat_c}, {lng_c}` (Copie e cole abaixo)")
+    
+    st.markdown("---")
     with st.form("form_enderecos_globais"):
         novos_enderecos = {}
         cols = st.columns(2)
@@ -357,14 +376,14 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     erros.append(base)
                     continue
                 
-                # PLANO B: Reconhecedor de Coordenadas (Latitude, Longitude) via Regex
+                # PLANO B: Reconhecedor de Coordenadas Exatas (Latitude, Longitude) via Regex
                 coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
                     continue
                 
-                # Se não é coordenada, vai pro satélite
+                # Se não for coordenada, envia para o satélite
                 if base not in st.session_state.coords_bases or st.session_state.enderecos_bases.get(base) != end:
                     c = buscar_coordenadas(end.strip())
                     if c:
@@ -382,28 +401,57 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                 time.sleep(1)
                 st.rerun()
 
-    # PLANO C: Botão de Pânico / Quebra Galho
+    # PLANO C: Botão de Pânico
     if st.session_state.erros_geocoding:
-        st.warning("⚠️ Bloqueio do Satélite detectado. Você tem duas opções para continuar:")
-        st.write("**1.** Pegue as coordenadas num mapa (Google Maps), cole o `-lat, -lon` na caixa acima e clique no botão vermelho novamente.")
-        st.write("**2.** Clique no botão abaixo para usar o centro da cidade temporariamente e liberar a ferramenta.")
-        
-        if st.button("🚨 Usar o Centro da Região para bases com erro e Continuar"):
-            cy = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -15.7801
-            cx = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -47.9292
+        st.warning("⚠️ Bloqueio do Satélite detectado. Copie as coordenadas clicando no mapa acima, ou clique abaixo para pular temporariamente.")
+        if st.button("🚨 Usar o Centro da Região para as bases com erro e Continuar"):
             for b_err in st.session_state.erros_geocoding:
-                st.session_state.coords_bases[b_err] = (cy, cx)
+                st.session_state.coords_bases[b_err] = (cy_helper, cx_helper)
                 st.session_state.enderecos_bases[b_err] = "Centro da Região (Fallback)"
             st.session_state.erros_geocoding = []
             st.rerun()
             
     st.stop() # Bloqueia o carregamento do app até resolver os endereços
 
+# ==========================================
+# PAINEL DE EDIÇÃO FÁCIL NA BARRA LATERAL
+# ==========================================
 st.sidebar.markdown("---")
-if st.sidebar.button("✏️ Editar Endereços das Bases", use_container_width=True):
-    st.session_state.coords_bases = {}
-    st.session_state.erros_geocoding = []
-    st.rerun()
+with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
+    st.caption("Corrija endereços ou insira coordenadas (lat, lon) sem reiniciar a página.")
+    with st.form("form_edit_sidebar"):
+        novos_ends_sidebar = {}
+        for base in transp_ativas:
+            val_atual = st.session_state.enderecos_bases.get(base, "")
+            novos_ends_sidebar[base] = st.text_input(f"Sede: {base}", value=val_atual, key=f"edit_{base}")
+            
+        if st.form_submit_button("Atualizar Coordenadas", type="primary", use_container_width=True):
+            erros_edit = []
+            for base, end in novos_ends_sidebar.items():
+                if not end.strip(): continue
+                
+                # Checa se é coordenada direta
+                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
+                if coord_match:
+                    st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
+                    st.session_state.enderecos_bases[base] = end
+                    continue
+                
+                # Se mudou o endereço de texto, busca no satélite
+                if st.session_state.enderecos_bases.get(base) != end:
+                    c = buscar_coordenadas(end.strip())
+                    if c:
+                        st.session_state.coords_bases[base] = c
+                        st.session_state.enderecos_bases[base] = end
+                    else:
+                        erros_edit.append(base)
+            
+            if erros_edit:
+                st.error(f"Erro ao buscar: {', '.join(erros_edit)}")
+            else:
+                st.success("Atualizado!")
+                time.sleep(1)
+                st.rerun()
 
 transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", transp_ativas, default=transp_ativas)
 with st.sidebar.expander("🎨 Personalizar Cores"):
@@ -656,22 +704,25 @@ with aba2:
     bases_ativas_ia = st.multiselect("Selecione as bases que farão parte desta malha:", transp_ativas, default=transp_ativas[:2] if len(transp_ativas) >= 2 else transp_ativas)
     
     if bases_ativas_ia:
-        for base in bases_ativas_ia:
-            chave_slider = f"vol_slider_{base}"
-            if chave_slider not in st.session_state:
-                st.session_state[chave_slider] = 100.0 / len(bases_ativas_ia)
-        
-        def atualiza_sliders(base_alterada, lista_bases):
-            novo_valor = st.session_state[f"vol_slider_{base_alterada}"]
-            outras_bases = [b for b in lista_bases if b != base_alterada]
-            if not outras_bases: return
-            resto = 100.0 - novo_valor
-            parcela_igual = resto / len(outras_bases)
-            for o in outras_bases:
-                st.session_state[f"vol_slider_{o}"] = parcela_igual
-
-        with st.form("form_ia_config"):
+        # CONTÊINER ESTÁTICO (NÃO PODE SER FORMULÁRIO)
+        with st.container():
             st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
+            
+            # Inicializa sliders se não existirem
+            for base in bases_ativas_ia:
+                chave_slider = f"vol_slider_{base}"
+                if chave_slider not in st.session_state:
+                    st.session_state[chave_slider] = 100.0 / len(bases_ativas_ia)
+            
+            def atualiza_sliders(base_alterada, lista_bases):
+                novo_valor = st.session_state[f"vol_slider_{base_alterada}"]
+                outras_bases = [b for b in lista_bases if b != base_alterada]
+                if not outras_bases: return
+                resto = 100.0 - novo_valor
+                parcela_igual = resto / len(outras_bases) if len(outras_bases) > 0 else 0
+                for o in outras_bases:
+                    st.session_state[f"vol_slider_{o}"] = parcela_igual
+
             cols_ia = st.columns(2)
             for i, base in enumerate(bases_ativas_ia):
                 with cols_ia[i % 2]:
@@ -687,7 +738,7 @@ with aba2:
                     )
             
             st.markdown("<br>", unsafe_allow_html=True)
-            submit_ia = st.form_submit_button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
+            submit_ia = st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
 
         if submit_ia:
             with st.spinner("Calculando matriz global de distâncias... isso pode levar alguns segundos."):

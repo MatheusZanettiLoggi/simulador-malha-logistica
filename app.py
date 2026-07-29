@@ -16,8 +16,10 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
 
+# 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
+# INJEÇÃO DE CSS PARA MODO IMPRESSÃO E AJUSTES DE INTERFACE
 st.markdown("""
     <style>
     @media print {
@@ -35,6 +37,9 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# ==========================================
+# VARIÁVEIS GLOBAIS E FUNÇÕES CORE
+# ==========================================
 COLUNA_CEP = 'Package ZIP'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
 TAG_MISSORTING = 'Remover da análise - Missorting'
@@ -116,8 +121,12 @@ def exportar_excel_formatado(df_dict):
             
             # --- SEPARAÇÃO DO ROUTING CODE NO EXCEL ---
             if 'Transportadora' in df.columns:
+                # Extrai a sigla que está entre parênteses no final da string
                 df['Routing Code'] = df['Transportadora'].str.extract(r'\(([^)]+)\)$').fillna('')
+                # Remove o (Sigla) do nome da Transportadora
                 df['Transportadora'] = df['Transportadora'].str.replace(r'\s*\([^)]+\)$', '', regex=True)
+                
+                # Reordena para o Routing Code ficar logo após a Transportadora
                 cols = list(df.columns)
                 cols.insert(cols.index('Transportadora') + 1, cols.pop(cols.index('Routing Code')))
                 df = df[cols]
@@ -162,6 +171,9 @@ def gerar_ranges_cep(df_cidade):
     df_range['CEP Final'] = df_range['CEP Final'].apply(formatar_cep)
     return df_range.sort_values(['Transportadora', 'CEP Inicial'])
 
+# ==========================================
+# FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
+# ==========================================
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
     endereco_formatado = endereco_busca.replace(" - ", ", ")
@@ -278,6 +290,9 @@ def load_dados(excel_file, zip_file, modo):
         
     return df_vol, gdf
 
+# ==========================================
+# FLUXO DA TELA INICIAL (LANDING PAGE & BACKUP)
+# ==========================================
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'
 
@@ -350,6 +365,9 @@ elif st.session_state.app_mode == 'load':
         st.rerun()
     st.stop()
 
+# ==========================================
+# BARRA LATERAL E INJEÇÃO DOS DADOS
+# ==========================================
 st.sidebar.title("⚙️ Modo de Operação")
 
 if st.session_state.get('is_loaded_from_backup', False):
@@ -395,14 +413,16 @@ else:
             st.rerun()
         st.stop()
 
+# Carregamento definitivo
 excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
 map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
 df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
-# Rótulos para os displays
+# DEFINIÇÃO SEGURA DOS RÓTULOS
 lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
+# Inicializações extras garantidas
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
@@ -454,6 +474,7 @@ bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, def
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
 else: df_cidade_orig = df_cidade_full.copy()
 
+# APLICAÇÃO DA LISTA NEGRA
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
 bairros_planilha = set(df_cidade_orig['Join_Bairro'])
@@ -490,6 +511,9 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
+# ==========================================
+# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO E FOCALIZADOR
+# ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
 if bases_sem_coord or st.session_state.erros_geocoding:
@@ -584,11 +608,17 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
     st.write("Não sabe o endereço exato ou o satélite falhou? Escolha a região abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente acima!")
     
+    # -----------------------------------------------------------------
+    # NOVO: SISTEMA DE FOCALIZAÇÃO DO MAPA AUXILIAR
+    # -----------------------------------------------------------------
     # Construção do Dicionário de Locais para o Dropdown
     dict_locais = {}
     for nome in sorted([str(x) for x in gdf_cidade['NM_BAIRRO_STR'].unique() if str(x).strip() != ""]):
         if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)":
-            display_name = f"{nome}"
+            # No modo regional, tenta deduzir a UF da primeira linha pra mostrar bonito, se não achar não quebra
+            cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
+            uf = descobrir_uf_pelo_cep(cep_amostra)
+            display_name = f"{nome} - {uf}"
         else:
             display_name = f"{nome} - {cidade_selecionada}"
         dict_locais[display_name] = nome
@@ -617,7 +647,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
     
-    # Desenha as bordas da cidade com Tooltip
+    # Desenha as bordas com Tooltip (agora mostrando o nome em todas as regiões)
     folium.GeoJson(
         gdf_cidade, 
         style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
@@ -641,6 +671,9 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     st.stop()
 
+# ==========================================
+# PAINEL DE EDIÇÃO NA BARRA LATERAL E RODAPÉ
+# ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
     st.caption("Corrija endereços, insira coordenadas (lat, lon) ou restaure bases removidas da análise.")
@@ -691,6 +724,7 @@ st.sidebar.markdown("---")
 st.sidebar.title("🖨️ Exportação (PDF)")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).\n\n*Os menus serão ocultados e a página ajustada automaticamente.*")
 
+# Assinatura Profissional
 st.sidebar.markdown(
     '''
     <div style="text-align: center; color: #888; font-size: 13px; margin-top: 30px;">
@@ -719,6 +753,9 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m['Bairro'] = gdf_m['Bairro'].fillna(gdf_m['NM_BAIRRO_STR'])
     gdf_m['Parceiros'] = gdf_m['Parceiros'].fillna('Sem Dados')
     
+    # --- NOVA COLUNA: Puxa apenas as siglas para limpar a etiqueta ---
+    gdf_m['Parceiros_Siglas'] = gdf_m['Parceiros'].apply(extrair_siglas)
+    
     def get_visibilidade(parceiros_str):
         if parceiros_str == 'Sem Dados': return True
         if parceiros_str == TAG_MISSORTING: return True 
@@ -731,6 +768,9 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m.loc[mask, 'Transportadora_Mapa'] = 'Oculto'
     return gdf_m
 
+# ==========================================
+# ESTRUTURA VISUAL: CABEÇALHO E BOTÃO DE SAVE
+# ==========================================
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
@@ -807,7 +847,8 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
         
     folium.GeoJson(
         gdf_mapa, style_function=style_fn,
-        tooltip=folium.GeoJsonTooltip(fields=['Bairro', 'Parceiros', 'Volume'], aliases=['Local:', 'Parceiros:', 'Volume:'], style="background-color: white; color: #333; padding: 10px;")
+        # AQUI FOI ALTERADO PARA USAR Parceiros_Siglas NA ETIQUETA PADRÃO
+        tooltip=folium.GeoJsonTooltip(fields=['Bairro', 'Parceiros_Siglas', 'Volume'], aliases=['Local:', 'Parceiros:', 'Volume:'], style="background-color: white; color: #333; padding: 10px;")
     ).add_to(m)
     
     for _, row in gdf_mapa.iterrows():
@@ -858,6 +899,9 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
+# ==========================================
+# ABA 1: Simulador Manual
+# ==========================================
 with aba1:
     st.markdown("### 📍 Cenário Atual")
     col_m1, col_t1 = st.columns([3, 1])
@@ -1004,6 +1048,9 @@ with aba1:
             st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
 
+# ==========================================
+# ABA 2: Inteligência Artificial
+# ==========================================
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
     st.info("A IA alocará as regiões baseadas na proximidade estrita com a base, crescendo de forma radial até bater a meta de pacotes alvo. **Não haverá sobreposição.**")
@@ -1150,6 +1197,9 @@ with aba2:
                     st.markdown(f"**Detalhamento por {lbl_local}**")
                     st.dataframe(gerar_tabela_detalhada(df_cidade_ia, lbl_local), use_container_width=True, hide_index=True)
 
+# ==========================================
+# ABA 3: Exportação e Ranges de CEP OFICIAIS
+# ==========================================
 with aba3:
     st.markdown("### 🗃️ Extração de Ranges de CEP por Base")
     st.write("Mapeamento automático dos CEPs reais da região selecionada para as transportadoras configuradas nas simulações.")

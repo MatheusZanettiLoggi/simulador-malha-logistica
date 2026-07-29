@@ -14,7 +14,7 @@ import io
 import random
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
-from openpyxl.styles import Font, Border, Side
+from openpyxl.styles import Font, Border, Side, Alignment
 
 # 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
@@ -82,7 +82,6 @@ def misturar_cores(lista_hex):
     return f"#{int(r/cores_validas):02x}{int(g/cores_validas):02x}{int(b/cores_validas):02x}"
 
 def gerar_tabela(df_cidade_tabela):
-    # Exclui o missorting das métricas oficiais
     df_valid = df_cidade_tabela[df_cidade_tabela['Transportadora'] != TAG_MISSORTING]
     vol_tabela = df_valid.groupby('Transportadora')['Volume'].sum().reset_index().sort_values('Volume', ascending=False)
     total_vol = vol_tabela['Volume'].sum()
@@ -120,7 +119,7 @@ def gerar_legenda(transp_presentes):
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
 
-# Função geradora de Excel Formatado (A Perfumaria)
+# Função geradora de Excel Formatado
 def exportar_excel_formatado(df_dict):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -128,7 +127,6 @@ def exportar_excel_formatado(df_dict):
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             worksheet = writer.sheets[sheet_name]
             
-            # Formatações Visuais
             worksheet.sheet_view.showGridLines = False
             font_normal = Font(name='Inter', size=10)
             font_bold = Font(name='Inter', size=10, bold=True)
@@ -138,14 +136,15 @@ def exportar_excel_formatado(df_dict):
                 top=Side(style='thin', color='D3D3D3'),
                 bottom=Side(style='thin', color='D3D3D3')
             )
+            alinhamento_centro = Alignment(horizontal='center', vertical='center')
             
-            # Aplica bordas, fontes e ajusta largura
             for col in worksheet.columns:
                 max_length = 0
                 col_letter = col[0].column_letter
                 for cell in col:
                     cell.font = font_bold if cell.row == 1 else font_normal
                     cell.border = borda_cinza
+                    cell.alignment = alinhamento_centro
                     try:
                         if len(str(cell.value)) > max_length:
                             max_length = len(str(cell.value))
@@ -158,10 +157,9 @@ def exportar_excel_formatado(df_dict):
 def gerar_ranges_cep(df_cidade):
     if df_cidade.empty:
         return pd.DataFrame()
-    # Ignora missorting para extração final
     df_valid = df_cidade[df_cidade['Transportadora'] != TAG_MISSORTING]
-    df_range = df_valid.groupby(['Transportadora', 'Bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
-    df_range.columns = ['Transportadora', 'Local', 'CEP Inicial', 'CEP Final']
+    df_range = df_valid.groupby(['Transportadora', 'Estado', 'Municipio', 'Bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
+    df_range.columns = ['Transportadora', 'Estado', 'Município', 'Bairro', 'CEP Inicial', 'CEP Final']
     df_range['CEP Inicial'] = df_range['CEP Inicial'].apply(formatar_cep)
     df_range['CEP Final'] = df_range['CEP Final'].apply(formatar_cep)
     return df_range.sort_values(['Transportadora', 'CEP Inicial'])
@@ -336,7 +334,6 @@ for i, transp in enumerate(todas_transp):
 st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
 st.session_state.cores_transp['Oculto'] = 'transparent'
 st.session_state.cores_transp['Sem Atendimento'] = '#808080'
-# Cor dark para a Tag Missorting
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
 df_vol = df_vol_raw.copy()
@@ -397,7 +394,7 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# ENDEREÇOS COM MAPA INTERATIVO (REORDENADO)
+# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL 
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -522,7 +519,20 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 
 st.sidebar.markdown("---")
 st.sidebar.title("🖨️ Exportação (PDF)")
-st.sidebar.info("Para gerar o **relatório visual (PDF)** desta simulação com os mapas limpos e dimensionados, dê uma passada rápida nas 3 abas e depois aperte **`Ctrl + P`** (ou `Cmd + P`) no seu teclado.\n\n*Os botões e barras laterais serão ocultados automaticamente.*")
+st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).\n\n*Os menus serão ocultados e a página ajustada automaticamente.*")
+
+# Assinatura Profissional
+st.sidebar.markdown(
+    '''
+    <div style="text-align: center; color: #888; font-size: 13px; margin-top: 30px;">
+        <hr style="border-top: 1px solid #ddd; margin-bottom: 15px;" />
+        Desenvolvido por<br>
+        <b style="color: #555;">Matheus Zanetti</b><br>
+        &copy; 2026
+    </div>
+    ''', 
+    unsafe_allow_html=True
+)
 
 @st.cache_data
 def prepara_mapa(df):
@@ -540,10 +550,9 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m['Bairro'] = gdf_m['Bairro'].fillna(gdf_m['NM_BAIRRO_STR'])
     gdf_m['Parceiros'] = gdf_m['Parceiros'].fillna('Sem Dados')
     
-    # Se for missorting, a visibilidade baseia-se num override manual, para pintar de escuro.
     def get_visibilidade(parceiros_str):
         if parceiros_str == 'Sem Dados': return True
-        if parceiros_str == TAG_MISSORTING: return True # Sempre desenha para sabermos que foi removido
+        if parceiros_str == TAG_MISSORTING: return True 
         return any(p in transp_selecionadas_sidebar for p in parceiros_str.split(' + '))
         
     gdf_m['Visivel'] = gdf_m['Parceiros'].apply(get_visibilidade).astype(bool)
@@ -646,7 +655,7 @@ aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Arti
 # ==========================================
 with aba1:
     st.markdown("### 📍 Cenário Atual")
-    col_m1, col_t1 = st.columns([2, 1])
+    col_m1, col_t1 = st.columns([3, 1])
     with col_m1:
         desenhar_mapa(gdf_mapa_orig, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
@@ -656,7 +665,6 @@ with aba1:
         gerar_legenda(t_orig_legenda)
         
     with col_t1:
-        # Excluir tag missorting do volume sum se houver
         vol_atual = df_cidade_orig[df_cidade_orig['Transportadora'] != TAG_MISSORTING]['Volume'].sum()
         st.metric("📦 Pacotes (Atual)", f"{vol_atual:,.0f}".replace(',','.'))
         st.markdown(f"**Abrangência ({lbl_locais}):**")
@@ -664,12 +672,19 @@ with aba1:
             st.write(f"- {base}: **{qtd}**")
         locais_comp_orig = df_mapa_orig_agg[df_mapa_orig_agg['Qtd_Bases'] > 1].shape[0]
         if locais_comp_orig > 0:
-            st.write(f"- 🔴 Compartilhados (Sobreposição): **{locais_comp_orig}**")
+            st.write(f"- 🔴 Compartilhados: **{locais_comp_orig}**")
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(gerar_tabela(df_cidade_orig), use_container_width=True, hide_index=True)
-        with st.expander(f"📊 Ver Volume por {lbl_local}"):
+            
+    # Tabela recolhível debaixo do mapa
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📊 Ver Tabelas de Volumetria (Cenário Atual)", expanded=False):
+        c_tab1, c_tab2 = st.columns(2)
+        with c_tab1:
+            st.markdown("**Resumo por Transportadora**")
+            st.dataframe(gerar_tabela(df_cidade_orig), use_container_width=True, hide_index=True)
+        with c_tab2:
+            st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_orig, lbl_local), use_container_width=True, hide_index=True)
 
     st.markdown("---")
@@ -734,12 +749,12 @@ with aba1:
                 if len(locais_afetados) > 0:
                     for b in locais_afetados:
                         st.session_state.simulacoes[b] = base_destino
-                    st.toast(f"✅ Operação inteira de {base_origem} transferida para {base_destino}!")
+                    st.toast(f"✅ Operação inteira transferida!")
                     st.rerun()
                 else:
-                    st.warning(f"A base {base_origem} não possui locais vinculados no cenário atual para transferir.")
+                    st.warning(f"A base {base_origem} não possui locais vinculados.")
 
-    col_m2, col_t2 = st.columns([2, 1])
+    col_m2, col_t2 = st.columns([3, 1])
     with col_m2:
         desenhar_mapa(gdf_mapa_sim, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
@@ -754,11 +769,10 @@ with aba1:
         locais_modificados = df_comp[df_comp['Parceiros_orig'] != df_comp['Parceiros_sim']]['Bairro']
         qtd_mod = len(locais_modificados)
         
-        # Volume ignorando missorting
         vol_mod = df_cidade_sim[(df_cidade_sim['Bairro'].isin(locais_modificados)) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)]['Volume'].sum()
         
         c1, c2 = st.columns(2)
-        lbl_mod = "Municípios Alterados" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros Alterados"
+        lbl_mod = "Locais Alterados"
         c1.metric(lbl_mod, qtd_mod)
         c2.metric("Volume Afetado", f"{vol_mod:,.0f}".replace(',','.'))
         
@@ -768,12 +782,19 @@ with aba1:
             
         locais_comp_sim = df_mapa_sim_agg[df_mapa_sim_agg['Qtd_Bases'] > 1].shape[0]
         if locais_comp_sim > 0:
-            st.write(f"- 🔴 Compartilhados (Sobreposição): **{locais_comp_sim}**")
+            st.write(f"- 🔴 Compartilhados: **{locais_comp_sim}**")
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
-        with st.expander(f"📊 Ver Volume por {lbl_local}"):
+
+    # Tabela recolhível debaixo do mapa Simulado
+    st.markdown("<br>", unsafe_allow_html=True)
+    with st.expander("📊 Ver Tabelas de Volumetria (Cenário Simulado)", expanded=False):
+        c_tab3, c_tab4 = st.columns(2)
+        with c_tab3:
+            st.markdown("**Resumo por Transportadora**")
+            st.dataframe(gerar_tabela(df_cidade_sim), use_container_width=True, hide_index=True)
+        with c_tab4:
+            st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
 
 # ==========================================
@@ -789,7 +810,6 @@ with aba2:
     if bases_ativas_ia:
         with st.container():
             st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
-            
             for base in bases_ativas_ia:
                 chave_slider = f"vol_slider_{base}"
                 if chave_slider not in st.session_state:
@@ -840,7 +860,6 @@ with aba2:
                                 bairros_unicos[jb] = {'Join_Bairro': jb, 'Vol': vol_bairro, 'lat': c_y, 'lon': c_x}
                                 
                     bairros_info = list(bairros_unicos.values())
-                    
                     matriz_distancias = []
                     for b_info in bairros_info:
                         for base in bases_ativas_ia:
@@ -900,7 +919,7 @@ with aba2:
             
             gdf_mapa_ia = merge_geo(gdf_cidade, df_mapa_ia_agg)
             
-            col_ia_m, col_ia_t = st.columns([2, 1])
+            col_ia_m, col_ia_t = st.columns([3, 1])
             with col_ia_m:
                 desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
                 bases_ativas_mapa_ia = sorted(df_cidade_ia['Transportadora'].unique())
@@ -910,8 +929,17 @@ with aba2:
                 
             with col_ia_t:
                 st.metric("Pacotes (Alocados pela IA)", f"{df_cidade_ia['Volume'].sum():,.0f}".replace(',','.'))
-                st.dataframe(gerar_tabela(df_cidade_ia), use_container_width=True, hide_index=True)
-                with st.expander(f"📊 Ver Volume por {lbl_local}"):
+                st.markdown(f"**Abrangência ({lbl_locais}):**")
+                for base, qtd in df_cidade_ia.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
+                    st.write(f"- {base}: **{qtd}**")
+
+            with st.expander("📊 Ver Tabelas de Volumetria (Cenário IA)", expanded=False):
+                c_tab5, c_tab6 = st.columns(2)
+                with c_tab5:
+                    st.markdown("**Resumo por Transportadora**")
+                    st.dataframe(gerar_tabela(df_cidade_ia), use_container_width=True, hide_index=True)
+                with c_tab6:
+                    st.markdown(f"**Detalhamento por {lbl_local}**")
                     st.dataframe(gerar_tabela_detalhada(df_cidade_ia, lbl_local), use_container_width=True, hide_index=True)
 
 # ==========================================
@@ -952,8 +980,15 @@ with aba3:
             st.divider()
 
             df_cidade_oficial.rename(columns={'cep': COLUNA_CEP, 'bairro': 'Bairro_Correios', 'municipio': 'Municipio_Correios'}, inplace=True)
-            if is_regional: df_cidade_oficial['Bairro'] = df_cidade_oficial['Municipio_Correios']
-            else: df_cidade_oficial['Bairro'] = df_cidade_oficial['Bairro_Correios']
+            
+            # Adiciona Estado e Município limpos para a extração do Excel
+            df_cidade_oficial['Estado'] = uf_automatica
+            df_cidade_oficial['Municipio'] = df_cidade_oficial['Municipio_Correios']
+            
+            if is_regional:
+                df_cidade_oficial['Bairro'] = df_cidade_oficial['Municipio_Correios']
+            else:
+                df_cidade_oficial['Bairro'] = df_cidade_oficial['Bairro_Correios']
 
             # ---------------------------------------------------------
             st.markdown("#### 1. Cenário Atual (Looker vs Correios)")
@@ -967,7 +1002,7 @@ with aba3:
                     Locais=('Bairro', lambda x: ', '.join(sorted(x.unique()))),
                     Parceiros_Envolvidos=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
                 ).reset_index()
-                st.error(f"⚠️ **Atenção:** Identificamos **{len(df_shared)} CEP(s)** que atualmente estão sobrepostos (atendidos por mais de uma base).")
+                st.error(f"⚠️ **Atenção:** Identificamos **{len(df_shared)} CEP(s)** que atualmente estão sobrepostos (atendidos por mais de uma base simultaneamente).")
                 with st.expander("🚨 Ver lista de CEPs Compartilhados"):
                     st.dataframe(df_shared, use_container_width=True, hide_index=True)
             
@@ -982,7 +1017,7 @@ with aba3:
             st.download_button(
                 label="📥 Baixar CEPs Cenário Atual (Excel)",
                 data=exportar_excel_formatado({"Cenario_Atual": df_range_orig}),
-                file_name=f"CEPs_Cenario_Atual_(Looker_vs_Correios).xlsx",
+                file_name=f"CEPs_Cenario_Atual_Looker_vs_Correios.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
@@ -1000,7 +1035,7 @@ with aba3:
             st.download_button(
                 label="📥 Baixar CEPs Cenário Simulado (Excel)",
                 data=exportar_excel_formatado({"Cenario_Simulado": df_range_sim}),
-                file_name=f"CEPs_Cenario_Simulado_(Manual_vs_Correios).xlsx",
+                file_name=f"CEPs_Cenario_Simulado_Manual_vs_Correios.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
@@ -1019,10 +1054,12 @@ with aba3:
                 st.download_button(
                     label="📥 Baixar CEPs Cenário IA (Excel)",
                     data=exportar_excel_formatado({"Cenario_IA": df_range_ia}),
-                    file_name=f"CEPs_Cenario_IA.xlsx",
+                    file_name=f"CEPs_Cenario_IA_Inteligencia_vs_Correios.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
+            # ---------------------------------------------------------
+            # MÓDULO DE DOWNLOAD EXCEL COM MULTIPLAS ABAS
             # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("### 🗂️ Exportar Resultados Consolidados")

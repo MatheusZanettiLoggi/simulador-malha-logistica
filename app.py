@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -252,7 +253,7 @@ def load_dados(excel_file, zip_file, modo):
             )
     
     with open("temp_mapa.zip", "wb") as f:
-        f.write(zip_file.getvalue()) # Usando getvalue para funcionar com o Backup e Uploaders
+        f.write(zip_file.getvalue()) 
     gdf = gpd.read_file('zip://temp_mapa.zip')
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
@@ -401,6 +402,10 @@ else:
 excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
 map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
 df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
+
+# DEFINIÇÃO CORRIGIDA DOS RÓTULOS (Evita o NameError)
+lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
+lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
 # Inicializações extras caso falte na memória
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
@@ -718,7 +723,6 @@ with col_btn:
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
     
-    # GERAÇÃO DO ARQUIVO ZIP COM AS PLANILHAS DENTRO
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('sessao.json', json_string)

@@ -16,10 +16,8 @@ from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
 
-# 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
-# INJEÇÃO DE CSS PARA MODO IMPRESSÃO E AJUSTES DE INTERFACE
 st.markdown("""
     <style>
     @media print {
@@ -37,9 +35,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ==========================================
-# VARIÁVEIS GLOBAIS E FUNÇÕES CORE
-# ==========================================
 COLUNA_CEP = 'Package ZIP'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
 TAG_MISSORTING = 'Remover da análise - Missorting'
@@ -119,18 +114,13 @@ def exportar_excel_formatado(df_dict):
         for sheet_name, df_raw in df_dict.items():
             df = df_raw.copy()
             
-            # --- INÍCIO DA SEPARAÇÃO DO ROUTING CODE ---
+            # --- SEPARAÇÃO DO ROUTING CODE NO EXCEL ---
             if 'Transportadora' in df.columns:
-                # Extrai o routing code e preenche vazios caso seja linha de TOTAL
                 df['Routing Code'] = df['Transportadora'].str.extract(r'\(([^)]+)\)$').fillna('')
-                # Remove o código do nome da Transportadora
                 df['Transportadora'] = df['Transportadora'].str.replace(r'\s*\([^)]+\)$', '', regex=True)
-                
-                # Reordena para ficar lado a lado
                 cols = list(df.columns)
                 cols.insert(cols.index('Transportadora') + 1, cols.pop(cols.index('Routing Code')))
                 df = df[cols]
-            # --- FIM DA SEPARAÇÃO ---
             
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             worksheet = writer.sheets[sheet_name]
@@ -172,9 +162,6 @@ def gerar_ranges_cep(df_cidade):
     df_range['CEP Final'] = df_range['CEP Final'].apply(formatar_cep)
     return df_range.sort_values(['Transportadora', 'CEP Inicial'])
 
-# ==========================================
-# FUNÇÕES DE CARGA E INTELIGÊNCIA GEOGRÁFICA
-# ==========================================
 def buscar_coordenadas(endereco_busca):
     time.sleep(1.5) 
     endereco_formatado = endereco_busca.replace(" - ", ", ")
@@ -291,9 +278,6 @@ def load_dados(excel_file, zip_file, modo):
         
     return df_vol, gdf
 
-# ==========================================
-# FLUXO DA TELA INICIAL (LANDING PAGE & BACKUP)
-# ==========================================
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'
 
@@ -366,9 +350,6 @@ elif st.session_state.app_mode == 'load':
         st.rerun()
     st.stop()
 
-# ==========================================
-# BARRA LATERAL E INJEÇÃO DOS DADOS
-# ==========================================
 st.sidebar.title("⚙️ Modo de Operação")
 
 if st.session_state.get('is_loaded_from_backup', False):
@@ -414,16 +395,14 @@ else:
             st.rerun()
         st.stop()
 
-# Carregamento definitivo
 excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
 map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
 df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
-# DEFINIÇÃO SEGURA DOS RÓTULOS (Evita NameError em qualquer fluxo)
+# Rótulos para os displays
 lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
-# Inicializações extras garantidas
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
@@ -475,7 +454,6 @@ bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, def
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
 else: df_cidade_orig = df_cidade_full.copy()
 
-# APLICAÇÃO DA LISTA NEGRA
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
 bairros_planilha = set(df_cidade_orig['Join_Bairro'])
@@ -512,9 +490,6 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
-# ==========================================
-# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
-# ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
 if bases_sem_coord or st.session_state.erros_geocoding:
@@ -607,13 +582,55 @@ if bases_sem_coord or st.session_state.erros_geocoding:
             
     st.markdown("---")
     st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
-    st.write("Não sabe o endereço exato ou o satélite falhou? Navegue no mapa abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente acima!")
+    st.write("Não sabe o endereço exato ou o satélite falhou? Escolha a região abaixo, clique no local da base e copie a coordenada gerada para a caixinha correspondente acima!")
     
-    cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
-    cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
+    # Construção do Dicionário de Locais para o Dropdown
+    dict_locais = {}
+    for nome in sorted([str(x) for x in gdf_cidade['NM_BAIRRO_STR'].unique() if str(x).strip() != ""]):
+        if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)":
+            display_name = f"{nome}"
+        else:
+            display_name = f"{nome} - {cidade_selecionada}"
+        dict_locais[display_name] = nome
+
+    opcoes_locais = ["-- Visão Geral do Mapa --"] + list(dict_locais.keys())
+    label_busca = "🔍 Buscar Município para focar no mapa:" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "🔍 Buscar Bairro para focar no mapa:"
     
-    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=11, tiles="CartoDB dark_matter")
-    folium.GeoJson(gdf_cidade, style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5}).add_to(m_helper)
+    local_foco_display = st.selectbox(label_busca, opcoes_locais)
+
+    # Determina o centro e zoom baseado no dropdown
+    if local_foco_display == "-- Visão Geral do Mapa --":
+        cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
+        cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
+        zoom_helper = 8 if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else 11
+    else:
+        nome_real = dict_locais[local_foco_display]
+        gdf_foco = gdf_cidade[gdf_cidade['NM_BAIRRO_STR'] == nome_real]
+        if not gdf_foco.empty:
+            cy_helper = gdf_foco.geometry.centroid.y.mean()
+            cx_helper = gdf_foco.geometry.centroid.x.mean()
+            zoom_helper = 12 if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else 14
+        else:
+            cy_helper = gdf_cidade.geometry.centroid.y.mean()
+            cx_helper = gdf_cidade.geometry.centroid.x.mean()
+            zoom_helper = 8
+
+    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
+    
+    # Desenha as bordas da cidade com Tooltip
+    folium.GeoJson(
+        gdf_cidade, 
+        style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
+        tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
+    ).add_to(m_helper)
+    
+    # Se um local foi selecionado, desenha ele em amarelo brilhante por cima
+    if local_foco_display != "-- Visão Geral do Mapa --" and not gdf_foco.empty:
+        folium.GeoJson(
+            gdf_foco,
+            style_function=lambda x: {'fillColor': '#f1c40f', 'color': '#f1c40f', 'weight': 2, 'fillOpacity': 0.6},
+            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local Destacado:'], style="background-color: white; color: #333; padding: 5px;")
+        ).add_to(m_helper)
     
     map_data = st_folium(m_helper, height=350, width=800)
     
@@ -624,9 +641,6 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     st.stop()
 
-# ==========================================
-# PAINEL DE EDIÇÃO NA BARRA LATERAL E RODAPÉ
-# ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
     st.caption("Corrija endereços, insira coordenadas (lat, lon) ou restaure bases removidas da análise.")
@@ -677,7 +691,6 @@ st.sidebar.markdown("---")
 st.sidebar.title("🖨️ Exportação (PDF)")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).\n\n*Os menus serão ocultados e a página ajustada automaticamente.*")
 
-# Assinatura Profissional
 st.sidebar.markdown(
     '''
     <div style="text-align: center; color: #888; font-size: 13px; margin-top: 30px;">
@@ -718,9 +731,6 @@ def merge_geo(gdf_cid, df_agg):
     gdf_m.loc[mask, 'Transportadora_Mapa'] = 'Oculto'
     return gdf_m
 
-# ==========================================
-# ESTRUTURA VISUAL: CABEÇALHO E BOTÃO DE SAVE
-# ==========================================
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
@@ -848,9 +858,6 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
-# ==========================================
-# ABA 1: Simulador Manual
-# ==========================================
 with aba1:
     st.markdown("### 📍 Cenário Atual")
     col_m1, col_t1 = st.columns([3, 1])
@@ -997,9 +1004,6 @@ with aba1:
             st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
 
-# ==========================================
-# ABA 2: Inteligência Artificial
-# ==========================================
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
     st.info("A IA alocará as regiões baseadas na proximidade estrita com a base, crescendo de forma radial até bater a meta de pacotes alvo. **Não haverá sobreposição.**")
@@ -1146,9 +1150,6 @@ with aba2:
                     st.markdown(f"**Detalhamento por {lbl_local}**")
                     st.dataframe(gerar_tabela_detalhada(df_cidade_ia, lbl_local), use_container_width=True, hide_index=True)
 
-# ==========================================
-# ABA 3: Exportação e Ranges de CEP OFICIAIS
-# ==========================================
 with aba3:
     st.markdown("### 🗃️ Extração de Ranges de CEP por Base")
     st.write("Mapeamento automático dos CEPs reais da região selecionada para as transportadoras configuradas nas simulações.")

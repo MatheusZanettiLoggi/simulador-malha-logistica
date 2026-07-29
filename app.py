@@ -19,7 +19,7 @@ from openpyxl.styles import Font, Border, Side, Alignment
 # 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
-# INJEÇÃO DE CSS PARA MODO IMPRESSÃO (PDF) OTIMIZADO
+# INJEÇÃO DE CSS PARA MODO IMPRESSÃO (PDF) OTIMIZADO E CORES RESPONSIVAS
 st.markdown("""
     <style>
     @media print {
@@ -81,6 +81,12 @@ def misturar_cores(lista_hex):
     if cores_validas == 0: return '#333333'
     return f"#{int(r/cores_validas):02x}{int(g/cores_validas):02x}{int(b/cores_validas):02x}"
 
+def extrair_siglas(parceiros_str):
+    # Encontra tudo que está entre parênteses para exibir no tooltip
+    siglas = re.findall(r'\((.*?)\)', parceiros_str)
+    if not siglas: return parceiros_str
+    return " + ".join([f"({s})" for s in siglas])
+
 def gerar_tabela(df_cidade_tabela):
     df_valid = df_cidade_tabela[df_cidade_tabela['Transportadora'] != TAG_MISSORTING]
     vol_tabela = df_valid.groupby('Transportadora')['Volume'].sum().reset_index().sort_values('Volume', ascending=False)
@@ -112,10 +118,11 @@ def gerar_legenda(transp_presentes):
     legenda = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px;'>"
     for transp in transp_presentes:
         if transp == 'Múltiplas Bases':
-            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: transparent; border-radius: 4px; border: 2px dashed #e74c3c; margin-right: 8px;'></div><span style='font-size: 14px; color: #333;'>Sobreposição (!)</span></div>"
+            # Usa color: inherit para adaptar ao Dark/Light mode automaticamente
+            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: transparent; border-radius: 4px; border: 2px dashed #e74c3c; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>Sobreposição (!)</span></div>"
         else:
             cor = st.session_state.cores_transp.get(transp, '#333333')
-            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: #333;'>{transp}</span></div>"
+            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{transp}</span></div>"
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
 
@@ -303,7 +310,7 @@ if 'de_para_bairros' not in st.session_state:
         st.session_state.de_para_bairros = {}
 
 # ==========================================
-# BARRA LATERAL (MENU)
+# BARRA LATERAL E CARGA DE DADOS
 # ==========================================
 st.sidebar.title("⚙️ Modo de Operação")
 modo_analise = st.sidebar.radio("Selecione o nível de granularidade:", options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"])
@@ -329,34 +336,32 @@ else:
     st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
     arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
 
-# --- NOVO MÓDULO DE SAVE / LOAD NA BARRA LATERAL ---
-st.sidebar.divider()
-st.sidebar.title("💾 Salvar / Carregar Sessão")
-st.sidebar.info("Para não perder seu trabalho ao fechar o navegador, salve o progresso e carregue depois.")
-
-# Lógica de Load (Upload do Json)
-uploaded_session = st.sidebar.file_uploader("Carregar Sessão (.json)", type=['json'])
-if uploaded_session is not None:
-    if st.sidebar.button("Restaurar Sessão", use_container_width=True):
-        try:
-            saved_state = json.load(uploaded_session)
-            st.session_state.simulacoes = saved_state.get('simulacoes', {})
-            # Converte as coordenadas salvas como array para tuplas
-            st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
-            st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
-            st.session_state.bases_ignoradas = saved_state.get('bases_ignoradas', [])
-            st.session_state.cores_transp = saved_state.get('cores_transp', {})
-            st.session_state.ia_resultado = saved_state.get('ia_resultado', {})
-            st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
-            st.toast("✅ Sessão restaurada com sucesso!")
-            time.sleep(1)
-            st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Erro ao ler arquivo: {e}")
-
+# ==========================================
+# LANDING PAGE (TELA DE BOAS VINDAS)
+# ==========================================
 if not arquivo_planilha or not arquivo_mapa:
     st.title("🗺️ Simulador de Malha Logística")
-    st.info("👈 Por favor, utilize a barra lateral para definir o modo de operação e importar os dados necessários.")
+    st.markdown("### Bem-vindo! Como deseja iniciar sua análise?")
+    
+    col_opt1, col_opt2 = st.columns(2)
+    with col_opt1:
+        st.info("**✨ Nova Análise**\n\nInicie um projeto do zero.\n\n👉 **Passo 1:** Importe a Planilha do Looker e o Mapa (IBGE) na barra lateral à esquerda.")
+    with col_opt2:
+        st.success("**📂 Carregar Análise Passada**\n\nContinue de onde parou.\n\n👉 **Passo 1:** Faça o upload do arquivo de Sessão (.json) logo abaixo.\n\n👉 **Passo 2:** Importe as planilhas originais na barra lateral.")
+        uploaded_session = st.file_uploader("Arquivo de Sessão (.json)", type=['json'], label_visibility="collapsed")
+        if uploaded_session:
+            try:
+                saved_state = json.load(uploaded_session)
+                st.session_state.simulacoes = saved_state.get('simulacoes', {})
+                st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
+                st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
+                st.session_state.bases_ignoradas = saved_state.get('bases_ignoradas', [])
+                st.session_state.cores_transp = saved_state.get('cores_transp', {})
+                st.session_state.ia_resultado = saved_state.get('ia_resultado', {})
+                st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
+                st.success("✅ Memória restaurada com sucesso! Aguardando as planilhas originais na barra lateral para renderizar os gráficos.")
+            except Exception as e:
+                st.error(f"Erro ao ler arquivo: {e}")
     st.stop()
 
 # ==========================================
@@ -436,27 +441,8 @@ transp_ativas.update(df_cidade_sim['Transportadora'].unique())
 transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
-# Lógica de Botão de Salvar (agora que transp_ativas está montado)
-state_to_save = {
-    'simulacoes': st.session_state.get('simulacoes', {}),
-    'coords_bases': st.session_state.get('coords_bases', {}),
-    'enderecos_bases': st.session_state.get('enderecos_bases', {}),
-    'bases_ignoradas': st.session_state.get('bases_ignoradas', []),
-    'cores_transp': st.session_state.get('cores_transp', {}),
-    'ia_resultado': st.session_state.get('ia_resultado', {}),
-    'de_para_bairros': st.session_state.get('de_para_bairros', {})
-}
-json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
-st.sidebar.download_button(
-    label="💾 Salvar Estado da Análise (.json)",
-    data=json_string,
-    file_name=f"Sessao_Malha_{limpa_texto(cidade_selecionada)}.json",
-    mime="application/json",
-    use_container_width=True
-)
-
 # ==========================================
-# ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL
+# ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -568,7 +554,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.stop()
 
 # ==========================================
-# PAINEL DE EDIÇÃO NA BARRA LATERAL (PÓS BLOQUEIO)
+# PAINEL DE EDIÇÃO NA BARRA LATERAL E RODAPÉ
 # ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
@@ -589,7 +575,6 @@ with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
             st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
-            
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 if not end.strip(): continue
@@ -663,10 +648,32 @@ def merge_geo(gdf_cid, df_agg):
     return gdf_m
 
 # ==========================================
-# ESTRUTURA VISUAL: ABAS
+# ESTRUTURA VISUAL: CABEÇALHO E BOTÃO DE SAVE
 # ==========================================
 titulo_app = cidade_selecionada if modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
-st.title(f"Planejamento de Malha: {titulo_app}")
+
+col_t, col_btn = st.columns([4, 1])
+with col_t:
+    st.title(f"Planejamento de Malha: {titulo_app}")
+with col_btn:
+    st.markdown("<br>", unsafe_allow_html=True)
+    state_to_save = {
+        'simulacoes': st.session_state.get('simulacoes', {}),
+        'coords_bases': st.session_state.get('coords_bases', {}),
+        'enderecos_bases': st.session_state.get('enderecos_bases', {}),
+        'bases_ignoradas': st.session_state.get('bases_ignoradas', []),
+        'cores_transp': st.session_state.get('cores_transp', {}),
+        'ia_resultado': st.session_state.get('ia_resultado', {}),
+        'de_para_bairros': st.session_state.get('de_para_bairros', {})
+    }
+    json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
+    st.download_button(
+        label="💾 Salvar Estado da Análise",
+        data=json_string,
+        file_name=f"Sessao_Malha_{limpa_texto(cidade_selecionada)}.json",
+        mime="application/json",
+        use_container_width=True
+    )
 
 df_mapa_sim_agg = prepara_mapa(df_cidade_sim)
 df_mapa_orig_agg = prepara_mapa(df_cidade_orig)
@@ -714,9 +721,19 @@ def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
     
     for _, row in gdf_mapa.iterrows():
         if row['Transportadora_Mapa'] == 'Múltiplas Bases' and pd.notnull(row['geometry']) and row['Visivel']:
+            siglas_alerta = extrair_siglas(row['Parceiros'])
+            local_nome = row['Bairro']
+            
+            html_tooltip = f'''
+            <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 150px;">
+                <b>Local:</b> {local_nome}<br>
+                <span style="color: #e74c3c;"><b>🚨 Sobreposição:</b></span><br>
+                {siglas_alerta}
+            </div>
+            '''
             folium.Marker(
                 [row['geometry'].centroid.y, row['geometry'].centroid.x],
-                tooltip=f"ALERTA - Sobreposição: {row['Parceiros']}",
+                tooltip=folium.Tooltip(html_tooltip),
                 icon=folium.Icon(color='red', icon='exclamation-sign')
             ).add_to(m)
 

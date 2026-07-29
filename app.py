@@ -243,12 +243,27 @@ def load_dados(excel_file, zip_file, modo):
         
     col_company = 'Package Last Mile Company Name'
     col_routing = 'Package Planned DC Routing Code'
-    if col_company in df.columns and col_routing in df.columns:
-        df[col_company] = df.apply(
-            lambda r: f"{r[col_company]} ({r[col_routing]})" if pd.notna(r[col_routing]) and str(r[col_routing]).strip() != "" else str(r[col_company]),
-            axis=1
-        )
+    
+    # ---------------------------------------------------------
+    # NOVO: FILTRO ESTrito DE LIMPEZA E MISSORTING
+    # ---------------------------------------------------------
+    if col_company in df.columns:
+        # Descarta linhas onde o nome da base é nulo ou string "nan"
+        df = df[df[col_company].notna()]
+        df = df[~df[col_company].astype(str).str.lower().isin(['nan', 'null', 'none', ''])]
         
+        if col_routing in df.columns:
+            # Descarta linhas onde não há Routing Code (Lixo de sistema)
+            df = df[df[col_routing].notna()]
+            df = df[df[col_routing].astype(str).str.strip() != ""]
+            df = df[~df[col_routing].astype(str).str.lower().isin(['nan', 'null', 'none'])]
+            
+            # Formata limpo: Nome (Código)
+            df[col_company] = df.apply(
+                lambda r: f"{r[col_company]} ({r[col_routing]})",
+                axis=1
+            )
+    
     with open("temp_mapa.zip", "wb") as f:
         f.write(zip_file.getbuffer())
     gdf = gpd.read_file('zip://temp_mapa.zip')
@@ -676,7 +691,6 @@ with aba1:
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
             
-    # Tabela recolhível debaixo do mapa
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📊 Ver Tabelas de Volumetria (Cenário Atual)", expanded=False):
         c_tab1, c_tab2 = st.columns(2)
@@ -786,7 +800,6 @@ with aba1:
         else:
             st.write(f"- 🟢 Compartilhados: **0**")
 
-    # Tabela recolhível debaixo do mapa Simulado
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📊 Ver Tabelas de Volumetria (Cenário Simulado)", expanded=False):
         c_tab3, c_tab4 = st.columns(2)
@@ -810,6 +823,7 @@ with aba2:
     if bases_ativas_ia:
         with st.container():
             st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
+            
             for base in bases_ativas_ia:
                 chave_slider = f"vol_slider_{base}"
                 if chave_slider not in st.session_state:
@@ -981,19 +995,14 @@ with aba3:
 
             df_cidade_oficial.rename(columns={'cep': COLUNA_CEP, 'bairro': 'Bairro_Correios', 'municipio': 'Municipio_Correios'}, inplace=True)
             
-            # Adiciona Estado e Município limpos para a extração do Excel
             df_cidade_oficial['Estado'] = uf_automatica
             df_cidade_oficial['Municipio'] = df_cidade_oficial['Municipio_Correios']
             
-            if is_regional:
-                df_cidade_oficial['Bairro'] = df_cidade_oficial['Municipio_Correios']
-            else:
-                df_cidade_oficial['Bairro'] = df_cidade_oficial['Bairro_Correios']
+            if is_regional: df_cidade_oficial['Bairro'] = df_cidade_oficial['Municipio_Correios']
+            else: df_cidade_oficial['Bairro'] = df_cidade_oficial['Bairro_Correios']
 
-            # ---------------------------------------------------------
             st.markdown("#### 1. Cenário Atual (Looker vs Correios)")
             
-            # Alerta de CEPs Compartilhados (Aba Atual)
             df_valid_orig_ceps = df_cidade_orig[df_cidade_orig['Transportadora'] != TAG_MISSORTING]
             cep_counts = df_valid_orig_ceps.groupby(COLUNA_CEP)['Transportadora'].nunique()
             shared_ceps = cep_counts[cep_counts > 1].index
@@ -1021,7 +1030,6 @@ with aba3:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
             map_sim = df_cidade_sim.groupby(df_cidade_sim['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
@@ -1039,7 +1047,6 @@ with aba3:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
             
-            # ---------------------------------------------------------
             if 'ia_resultado' in st.session_state:
                 st.markdown("---")
                 st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
@@ -1058,9 +1065,6 @@ with aba3:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
-            # ---------------------------------------------------------
-            # MÓDULO DE DOWNLOAD EXCEL COM MULTIPLAS ABAS
-            # ---------------------------------------------------------
             st.markdown("---")
             st.markdown("### 🗂️ Exportar Resultados Consolidados")
             st.write("Baixe todas as tabelas (Volume e Ranges) juntas em um único arquivo Excel multipáginas formatado.")

@@ -116,7 +116,22 @@ def gerar_legenda(transp_presentes):
 def exportar_excel_formatado(df_dict):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        for sheet_name, df in df_dict.items():
+        for sheet_name, df_raw in df_dict.items():
+            df = df_raw.copy()
+            
+            # --- INÍCIO DA SEPARAÇÃO DO ROUTING CODE ---
+            if 'Transportadora' in df.columns:
+                # Extrai o routing code e preenche vazios caso seja linha de TOTAL
+                df['Routing Code'] = df['Transportadora'].str.extract(r'\(([^)]+)\)$').fillna('')
+                # Remove o código do nome da Transportadora
+                df['Transportadora'] = df['Transportadora'].str.replace(r'\s*\([^)]+\)$', '', regex=True)
+                
+                # Reordena para ficar lado a lado
+                cols = list(df.columns)
+                cols.insert(cols.index('Transportadora') + 1, cols.pop(cols.index('Routing Code')))
+                df = df[cols]
+            # --- FIM DA SEPARAÇÃO ---
+            
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             worksheet = writer.sheets[sheet_name]
             
@@ -841,7 +856,7 @@ with aba1:
     col_m1, col_t1 = st.columns([3, 1])
     with col_m1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
-        pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig}
+        pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         desenhar_mapa(gdf_mapa_orig, cy, cx, zoom_padrao, pinos_bases=pinos_orig)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
@@ -941,7 +956,7 @@ with aba1:
     col_m2, col_t2 = st.columns([3, 1])
     with col_m2:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
-        pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim}
+        pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING}
         desenhar_mapa(gdf_mapa_sim, cy, cx, zoom_padrao, pinos_bases=pinos_sim)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
@@ -1108,7 +1123,7 @@ with aba2:
             col_ia_m, col_ia_t = st.columns([3, 1])
             with col_ia_m:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia['Transportadora'].unique())
-                pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia}
+                pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING}
                 desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=pinos_ia)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]

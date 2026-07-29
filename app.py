@@ -245,20 +245,17 @@ def load_dados(excel_file, zip_file, modo):
     col_routing = 'Package Planned DC Routing Code'
     
     # ---------------------------------------------------------
-    # NOVO: FILTRO ESTrito DE LIMPEZA E MISSORTING
+    # FILTRO ESTrito DE LIMPEZA E MISSORTING (Lixo de Sistema)
     # ---------------------------------------------------------
     if col_company in df.columns:
-        # Descarta linhas onde o nome da base é nulo ou string "nan"
         df = df[df[col_company].notna()]
         df = df[~df[col_company].astype(str).str.lower().isin(['nan', 'null', 'none', ''])]
         
         if col_routing in df.columns:
-            # Descarta linhas onde não há Routing Code (Lixo de sistema)
             df = df[df[col_routing].notna()]
             df = df[df[col_routing].astype(str).str.strip() != ""]
             df = df[~df[col_routing].astype(str).str.lower().isin(['nan', 'null', 'none'])]
             
-            # Formata limpo: Nome (Código)
             df[col_company] = df.apply(
                 lambda r: f"{r[col_company]} ({r[col_routing]})",
                 axis=1
@@ -329,6 +326,7 @@ if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_rei
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
 if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
 if 'erros_geocoding' not in st.session_state: st.session_state.erros_geocoding = []
+if 'bases_ignoradas' not in st.session_state: st.session_state.bases_ignoradas = []
 
 if 'de_para_bairros' not in st.session_state:
     if os.path.exists(ARQUIVO_DE_PARA):
@@ -374,12 +372,17 @@ bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, def
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
 else: df_cidade_orig = df_cidade_full.copy()
 
-bairros_planilha = set(df_cidade_full['Join_Bairro'])
+# ==========================================
+# APLICAÇÃO DA LISTA NEGRA (BASES IGNORADAS)
+# ==========================================
+df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
+
+bairros_planilha = set(df_cidade_orig['Join_Bairro'])
 bairros_ibge = set(gdf_cidade['Join_Bairro'])
 divergentes = bairros_planilha - bairros_ibge
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)"):
-        bairros_planilha_vazios = df_cidade_full[df_cidade_full['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
+        bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
         bairros_ibge_vazios = gdf_cidade[~gdf_cidade['Join_Bairro'].isin(bairros_planilha)]['NM_BAIRRO_STR'].unique()
         bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + sorted(bairros_ibge_vazios))
         if bairro_ibge_selecionado != "-- Nenhum --":
@@ -409,7 +412,7 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL 
+# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -423,15 +426,29 @@ if bases_sem_coord or st.session_state.erros_geocoding:
         idx_col = 0
         for base in transp_ativas:
             if base == TAG_MISSORTING: continue
-            val_atual = st.session_state.enderecos_bases.get(base, "")
-            novos_enderecos[base] = cols[idx_col % 2].text_input(f"🏢 Sede: {base}", value=val_atual, placeholder="Ex: Av. Paulista, 1000 ou -23.55, -46.63")
+            with cols[idx_col % 2]:
+                st.markdown(f"**🏢 {base}**")
+                val_atual = st.session_state.enderecos_bases.get(base, "")
+                end = st.text_input(f"Endereço_{base}", value=val_atual, placeholder="Ex: Av. Paulista, 1000 ou -23.55, -46.63", label_visibility="collapsed")
+                ignorar = st.checkbox("❌ Remover da análise (Missorting / Outro Estado)", key=f"ignorar_init_{base}")
+                if not ignorar:
+                    novos_enderecos[base] = end
             idx_col += 1
             
         st.markdown("<br>", unsafe_allow_html=True)
         submit_enderecos = st.form_submit_button("Localizar Bases e Iniciar Simulador 🚀", type="primary")
         
     if submit_enderecos:
-        with st.spinner("Analisando coordenadas..."):
+        with st.spinner("Processando..."):
+            # Atualiza lista de bases ignoradas
+            bases_para_ignorar = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_init_{b}")]
+            if bases_para_ignorar:
+                for b in bases_para_ignorar:
+                    if b not in st.session_state.bases_ignoradas:
+                        st.session_state.bases_ignoradas.append(b)
+                # Como a lista de ativas mudou, forçamos um rerun imediato para limpar a memória
+                st.rerun()
+
             erros = []
             for base, end in novos_enderecos.items():
                 if not end.strip():
@@ -496,15 +513,24 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 # ==========================================
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Endereços das Bases", expanded=False):
-    st.caption("Corrija endereços ou insira coordenadas (lat, lon) sem reiniciar a página.")
+    st.caption("Corrija endereços, insira coordenadas (lat, lon) ou restaure bases removidas da análise.")
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
-        for base in transp_ativas:
+        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
+        
+        for base in todas_bases_projeto:
             if base == TAG_MISSORTING: continue
-            val_atual = st.session_state.enderecos_bases.get(base, "")
-            novos_ends_sidebar[base] = st.text_input(f"Sede: {base}", value=val_atual, key=f"edit_{base}")
+            st.markdown(f"**{base}**")
+            is_ignored = base in st.session_state.bases_ignoradas
+            ignorar = st.checkbox("❌ Removida (Missorting)", value=is_ignored, key=f"ignorar_edit_{base}")
             
-        if st.form_submit_button("Atualizar Coordenadas", type="primary", use_container_width=True):
+            if not ignorar:
+                val_atual = st.session_state.enderecos_bases.get(base, "")
+                novos_ends_sidebar[base] = st.text_input(f"end_edit_{base}", value=val_atual, label_visibility="collapsed")
+            
+        if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
+            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 if not end.strip(): continue
@@ -947,6 +973,7 @@ with aba2:
                 for base, qtd in df_cidade_ia.groupby('Transportadora')['Bairro'].nunique().sort_values(ascending=False).items():
                     st.write(f"- {base}: **{qtd}**")
 
+            st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("📊 Ver Tabelas de Volumetria (Cenário IA)", expanded=False):
                 c_tab5, c_tab6 = st.columns(2)
                 with c_tab5:

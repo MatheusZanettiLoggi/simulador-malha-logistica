@@ -840,8 +840,10 @@ with aba1:
     st.markdown("### 📍 Cenário Atual")
     col_m1, col_t1 = st.columns([3, 1])
     with col_m1:
-        desenhar_mapa(gdf_mapa_orig, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
+        pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig}
+        desenhar_mapa(gdf_mapa_orig, cy, cx, zoom_padrao, pinos_bases=pinos_orig)
+        
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         if 'Múltiplas Bases' in gdf_mapa_orig['Transportadora_Mapa'].values: t_orig_legenda.append('Múltiplas Bases')
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -938,8 +940,10 @@ with aba1:
 
     col_m2, col_t2 = st.columns([3, 1])
     with col_m2:
-        desenhar_mapa(gdf_mapa_sim, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
+        pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim}
+        desenhar_mapa(gdf_mapa_sim, cy, cx, zoom_padrao, pinos_bases=pinos_sim)
+        
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         if TAG_MISSORTING in bases_ativas_sim: t_sim_legenda.append(TAG_MISSORTING)
         if 'Múltiplas Bases' in gdf_mapa_sim['Transportadora_Mapa'].values: t_sim_legenda.append('Múltiplas Bases')
@@ -1103,8 +1107,10 @@ with aba2:
             
             col_ia_m, col_ia_t = st.columns([3, 1])
             with col_ia_m:
-                desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=st.session_state.get('coords_bases'))
                 bases_ativas_mapa_ia = sorted(df_cidade_ia['Transportadora'].unique())
+                pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia}
+                desenhar_mapa(gdf_mapa_ia, cy, cx, zoom_padrao, pinos_bases=pinos_ia)
+                
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
                 gerar_legenda(t_ia_legenda)

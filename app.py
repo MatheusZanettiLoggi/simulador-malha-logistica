@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -12,6 +11,7 @@ import re
 import time
 import io
 import random
+import zipfile
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
@@ -19,30 +19,19 @@ from openpyxl.styles import Font, Border, Side, Alignment
 # 1. Configuração da Página
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
-# INJEÇÃO DE CSS PARA MODO IMPRESSÃO (PDF) OTIMIZADO E CORES RESPONSIVAS
+# INJEÇÃO DE CSS PARA MODO IMPRESSÃO E AJUSTES DE INTERFACE
 st.markdown("""
     <style>
     @media print {
         section[data-testid="stSidebar"] { display: none !important; }
         header[data-testid="stHeader"] { display: none !important; }
         button { display: none !important; }
-        
-        /* Expande as abas no PDF */
         .stTabs [data-baseweb="tab-list"] { display: none !important; }
-        .stTabs [data-baseweb="tab-panel"] { 
-            display: block !important; 
-            visibility: visible !important; 
-            height: auto !important; 
-            position: static !important; 
-            opacity: 1 !important; 
-        }
-        
-        /* Esconde barras de rolagem e limpa os mapas */
+        .stTabs [data-baseweb="tab-panel"] { display: block !important; visibility: visible !important; height: auto !important; position: static !important; opacity: 1 !important; }
         ::-webkit-scrollbar { display: none !important; }
         .main .block-container { padding: 0 !important; max-width: 100% !important; overflow: hidden !important; }
         iframe { overflow: hidden !important; }
         .leaflet-control-container { display: none !important; }
-        
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     }
     </style>
@@ -82,7 +71,6 @@ def misturar_cores(lista_hex):
     return f"#{int(r/cores_validas):02x}{int(g/cores_validas):02x}{int(b/cores_validas):02x}"
 
 def extrair_siglas(parceiros_str):
-    # Encontra tudo que está entre parênteses para exibir no tooltip
     siglas = re.findall(r'\((.*?)\)', parceiros_str)
     if not siglas: return parceiros_str
     return " + ".join([f"({s})" for s in siglas])
@@ -118,7 +106,6 @@ def gerar_legenda(transp_presentes):
     legenda = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px;'>"
     for transp in transp_presentes:
         if transp == 'Múltiplas Bases':
-            # Usa color: inherit para adaptar ao Dark/Light mode automaticamente
             legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: transparent; border-radius: 4px; border: 2px dashed #e74c3c; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>Sobreposição (!)</span></div>"
         else:
             cor = st.session_state.cores_transp.get(transp, '#333333')
@@ -126,7 +113,6 @@ def gerar_legenda(transp_presentes):
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
 
-# Função geradora de Excel Formatado
 def exportar_excel_formatado(df_dict):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -251,7 +237,6 @@ def load_dados(excel_file, zip_file, modo):
     col_company = 'Package Last Mile Company Name'
     col_routing = 'Package Planned DC Routing Code'
     
-    # FILTRO DE LIMPEZA E MISSORTING ESTRUTURAL
     if col_company in df.columns:
         df = df[df[col_company].notna()]
         df = df[~df[col_company].astype(str).str.lower().isin(['nan', 'null', 'none', ''])]
@@ -267,7 +252,7 @@ def load_dados(excel_file, zip_file, modo):
             )
     
     with open("temp_mapa.zip", "wb") as f:
-        f.write(zip_file.getbuffer())
+        f.write(zip_file.getvalue()) # Usando getvalue para funcionar com o Backup e Uploaders
     gdf = gpd.read_file('zip://temp_mapa.zip')
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
@@ -292,15 +277,137 @@ def load_dados(excel_file, zip_file, modo):
     return df_vol, gdf
 
 # ==========================================
-# INICIALIZAÇÃO DE ESTADO
+# FLUXO DA TELA INICIAL (LANDING PAGE & BACKUP)
 # ==========================================
+if 'app_mode' not in st.session_state:
+    st.session_state.app_mode = 'home'
+
+if st.session_state.app_mode == 'home':
+    st.markdown("<style>section[data-testid='stSidebar'] {display: none !important;}</style>", unsafe_allow_html=True)
+    st.title("🗺️ Simulador de Malha Logística")
+    st.markdown("### Bem-vindo! Como deseja iniciar sua análise?")
+    st.write("Selecione uma das opções abaixo para começar.")
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.info("**✨ Nova Análise**\n\nInicie um projeto do zero.")
+        if st.button("Iniciar Nova Análise", use_container_width=True):
+            st.session_state.app_mode = 'new'
+            st.rerun()
+    with col2:
+        st.success("**📂 Carregar Análise Passada**\n\nContinue exatamente de onde parou importando seu backup (.zip).")
+        if st.button("Carregar Backup (.zip)", use_container_width=True):
+            st.session_state.app_mode = 'load'
+            st.rerun()
+            
+    st.markdown(
+        '''
+        <div style="text-align: center; color: #888; font-size: 14px; margin-top: 50px;">
+            <hr style="border-top: 1px solid #ddd; margin-bottom: 15px; width: 50%; margin-left: auto; margin-right: auto;" />
+            Desenvolvido por <b style="color: #555;">Matheus Zanetti</b> &copy; 2026
+        </div>
+        ''', 
+        unsafe_allow_html=True
+    )
+    st.stop()
+
+elif st.session_state.app_mode == 'load':
+    st.markdown("<style>section[data-testid='stSidebar'] {display: none !important;}</style>", unsafe_allow_html=True)
+    st.title("📂 Restaurar Análise Passada")
+    st.write("Faça o upload do arquivo de backup **.zip** gerado pelo Simulador na sua última sessão. Ele já contém a planilha de volumetria, o mapa original e todas as configurações da sua análise (Bases ignoradas, pinos, simulações).")
+    
+    upload_zip = st.file_uploader("Upload do Backup (.zip)", type=['zip'])
+    if upload_zip:
+        with st.spinner("Extraindo banco de dados e restaurando conexões..."):
+            try:
+                with zipfile.ZipFile(upload_zip, 'r') as zf:
+                    json_str = zf.read('sessao.json').decode('utf-8')
+                    saved_state = json.loads(json_str)
+
+                    st.session_state.simulacoes = saved_state.get('simulacoes', {})
+                    st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
+                    st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
+                    st.session_state.bases_ignoradas = saved_state.get('bases_ignoradas', [])
+                    st.session_state.cores_transp = saved_state.get('cores_transp', {})
+                    st.session_state.ia_resultado = saved_state.get('ia_resultado', {})
+                    st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
+                    st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
+
+                    st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
+                    st.session_state.loaded_ibge_bytes = zf.read('mapa.zip')
+
+                st.session_state.is_loaded_from_backup = True
+                st.session_state.app_mode = 'running'
+                st.success("✅ Backup restaurado com sucesso! Iniciando...")
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Erro ao extrair o backup: Certifique-se que o arquivo .zip foi gerado por este aplicativo. Detalhe: {e}")
+                
+    st.markdown("<br>", unsafe_allow_html=True)
+    if st.button("⬅️ Cancelar e Voltar"):
+        st.session_state.app_mode = 'home'
+        st.rerun()
+    st.stop()
+
+# ==========================================
+# BARRA LATERAL E INJEÇÃO DOS DADOS
+# ==========================================
+st.sidebar.title("⚙️ Modo de Operação")
+
+if st.session_state.get('is_loaded_from_backup', False):
+    modo_analise = st.session_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
+    st.sidebar.info(f"Modo Atual: **{modo_analise}**\n\n*(Sessão Carregada via Backup)*")
+    st.sidebar.success("✅ Arquivos de Volume e Mapas do IBGE restaurados automaticamente da memória.")
+    st.sidebar.markdown("<br>", unsafe_allow_html=True)
+    if st.sidebar.button("🗑️ Fechar Análise e Voltar ao Início", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+else:
+    modo_analise = st.sidebar.radio("Selecione o nível de granularidade:", options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"])
+    st.sidebar.divider()
+    st.sidebar.title("📁 Importação de Dados")
+
+    st.sidebar.markdown("**1. Planilha de Volumetria**")
+    st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
+    st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26291)")
+    arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
+
+    st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
+    if modo_analise == "🏙️ Intra-Município (Por Bairros)":
+        st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
+        st.sidebar.markdown("[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
+        arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Bairros (ZIP)", type=['zip'], key="up_bairro")
+    else:
+        st.sidebar.caption("Para migrações de malha entre bases, precisamos do mapa de Municípios.")
+        st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
+        arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
+
+    if arquivo_planilha and arquivo_mapa:
+        st.session_state.loaded_excel_bytes = arquivo_planilha.getvalue()
+        st.session_state.loaded_ibge_bytes = arquivo_mapa.getvalue()
+        st.session_state.modo_analise = modo_analise
+    else:
+        st.title("🗺️ Simulador de Malha Logística")
+        st.info("👈 Por favor, importe os dados na barra lateral à esquerda para iniciar a análise.")
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("⬅️ Voltar ao Menu Inicial"):
+            st.session_state.clear()
+            st.rerun()
+        st.stop()
+
+# Carregamento definitivo
+excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
+map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
+df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
+
+# Inicializações extras caso falte na memória
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
-if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
 if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
 if 'erros_geocoding' not in st.session_state: st.session_state.erros_geocoding = []
 if 'bases_ignoradas' not in st.session_state: st.session_state.bases_ignoradas = []
-if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
 
 if 'de_para_bairros' not in st.session_state:
     if os.path.exists(ARQUIVO_DE_PARA):
@@ -309,66 +416,9 @@ if 'de_para_bairros' not in st.session_state:
     else:
         st.session_state.de_para_bairros = {}
 
-# ==========================================
-# BARRA LATERAL E CARGA DE DADOS
-# ==========================================
-st.sidebar.title("⚙️ Modo de Operação")
-modo_analise = st.sidebar.radio("Selecione o nível de granularidade:", options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"])
-
-lbl_local = "Município" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
-lbl_locais = "Municípios" if modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
-
-st.sidebar.divider()
-st.sidebar.title("📁 Importação de Dados")
-
-st.sidebar.markdown("**1. Planilha de Volumetria**")
-st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
-st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26291)")
-arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
-
-st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
-if modo_analise == "🏙️ Intra-Município (Por Bairros)":
-    st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
-    st.sidebar.markdown("[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
-    arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Bairros (ZIP)", type=['zip'], key="up_bairro")
-else:
-    st.sidebar.caption("Para migrações de malha entre bases, precisamos do mapa de Municípios.")
-    st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
-    arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
-
-# ==========================================
-# LANDING PAGE (TELA DE BOAS VINDAS)
-# ==========================================
-if not arquivo_planilha or not arquivo_mapa:
-    st.title("🗺️ Simulador de Malha Logística")
-    st.markdown("### Bem-vindo! Como deseja iniciar sua análise?")
+if 'cores_transp' not in st.session_state:
+    st.session_state.cores_transp = {}
     
-    col_opt1, col_opt2 = st.columns(2)
-    with col_opt1:
-        st.info("**✨ Nova Análise**\n\nInicie um projeto do zero.\n\n👉 **Passo 1:** Importe a Planilha do Looker e o Mapa (IBGE) na barra lateral à esquerda.")
-    with col_opt2:
-        st.success("**📂 Carregar Análise Passada**\n\nContinue de onde parou.\n\n👉 **Passo 1:** Faça o upload do arquivo de Sessão (.json) logo abaixo.\n\n👉 **Passo 2:** Importe as planilhas originais na barra lateral.")
-        uploaded_session = st.file_uploader("Arquivo de Sessão (.json)", type=['json'], label_visibility="collapsed")
-        if uploaded_session:
-            try:
-                saved_state = json.load(uploaded_session)
-                st.session_state.simulacoes = saved_state.get('simulacoes', {})
-                st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
-                st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
-                st.session_state.bases_ignoradas = saved_state.get('bases_ignoradas', [])
-                st.session_state.cores_transp = saved_state.get('cores_transp', {})
-                st.session_state.ia_resultado = saved_state.get('ia_resultado', {})
-                st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
-                st.success("✅ Memória restaurada com sucesso! Aguardando as planilhas originais na barra lateral para renderizar os gráficos.")
-            except Exception as e:
-                st.error(f"Erro ao ler arquivo: {e}")
-    st.stop()
-
-# ==========================================
-# PROCESSAMENTO DOS DADOS (PÓS UPLOAD)
-# ==========================================
-df_vol_raw, gdf = load_dados(arquivo_planilha, arquivo_mapa, modo_analise)
-
 cores_padrao = ['#9b59b6', '#e67e22', '#3498db', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#ff9ff3', '#00cec9', '#fdcb6e']
 todas_transp = sorted(df_vol_raw['Transportadora'].unique())
 for i, transp in enumerate(todas_transp):
@@ -387,18 +437,17 @@ df_vol['Bairro'] = df_vol['Bairro'].astype(str).str.title()
 df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x.mode()[0] if not x.empty else x)
 df_vol = df_vol.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Transportadora', COLUNA_CEP])['Volume'].sum().reset_index()
 
-cidades_disponiveis = sorted(df_vol['Cidade'].unique())
-cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
-
 st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
+cidades_disponiveis = sorted(df_vol['Cidade'].unique())
+cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
 df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
 gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
 bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
-lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
+lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if st.session_state.modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
 bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, default=[])
 
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
@@ -442,7 +491,7 @@ transp_ativas.update(df_cidade_ia_temp['Transportadora'].unique())
 transp_ativas = sorted(list(transp_ativas))
 
 # ==========================================
-# ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
+# REQUISITO OBRIGATÓRIO: ENDEREÇOS COM MAPA INTERATIVO CLICÁVEL E OPÇÃO DE REMOÇÃO
 # ==========================================
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
 
@@ -650,7 +699,7 @@ def merge_geo(gdf_cid, df_agg):
 # ==========================================
 # ESTRUTURA VISUAL: CABEÇALHO E BOTÃO DE SAVE
 # ==========================================
-titulo_app = cidade_selecionada if modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
+titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
 with col_t:
@@ -664,14 +713,25 @@ with col_btn:
         'bases_ignoradas': st.session_state.get('bases_ignoradas', []),
         'cores_transp': st.session_state.get('cores_transp', {}),
         'ia_resultado': st.session_state.get('ia_resultado', {}),
-        'de_para_bairros': st.session_state.get('de_para_bairros', {})
+        'de_para_bairros': st.session_state.get('de_para_bairros', {}),
+        'modo_analise': st.session_state.get('modo_analise', '🏙️ Intra-Município (Por Bairros)')
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
+    
+    # GERAÇÃO DO ARQUIVO ZIP COM AS PLANILHAS DENTRO
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr('sessao.json', json_string)
+        zf.writestr('volume.xlsx', st.session_state.loaded_excel_bytes)
+        zf.writestr('mapa.zip', st.session_state.loaded_ibge_bytes)
+        
+    zip_data = buf.getvalue()
+
     st.download_button(
         label="💾 Salvar Estado da Análise",
-        data=json_string,
-        file_name=f"Sessao_Malha_{limpa_texto(cidade_selecionada)}.json",
-        mime="application/json",
+        data=zip_data,
+        file_name=f"Backup_Malha_{limpa_texto(cidade_selecionada)}.zip",
+        mime="application/zip",
         use_container_width=True
     )
 
@@ -687,13 +747,13 @@ gdf_mapa_sim = merge_geo(gdf_cidade, df_mapa_sim_agg)
 if bairros_selecionados and not gdf_mapa_orig[gdf_mapa_orig['Transportadora_Mapa'] != 'Oculto'].empty:
     cy = gdf_mapa_orig[gdf_mapa_orig['Transportadora_Mapa'] != 'Oculto'].geometry.centroid.y.mean()
     cx = gdf_mapa_orig[gdf_mapa_orig['Transportadora_Mapa'] != 'Oculto'].geometry.centroid.x.mean()
-    zoom_padrao = 12 if modo_analise == "🏙️ Intra-Município (Por Bairros)" else 9
+    zoom_padrao = 12 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 9
 else:
     if not gdf_mapa_orig.empty:
         cy, cx = gdf_mapa_orig.geometry.centroid.y.mean(), gdf_mapa_orig.geometry.centroid.x.mean()
     else:
         cy, cx = -15.7801, -47.9292 
-    zoom_padrao = 11 if modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
+    zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
 def desenhar_mapa(gdf_mapa, cy, cx, zoom, pinos_bases=None):
     if gdf_mapa.empty:
@@ -1068,7 +1128,7 @@ with aba3:
     
     cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
     uf_automatica = descobrir_uf_pelo_cep(cep_amostra)
-    is_regional = (modo_analise == "🗺️ Regional (Por Cidades)")
+    is_regional = (st.session_state.modo_analise == "🗺️ Regional (Por Cidades)")
     
     if not is_regional:
         cidade_oficial = limpa_texto(cidade_selecionada)

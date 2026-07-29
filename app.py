@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -364,6 +363,7 @@ if st.session_state.get('is_loaded_from_backup', False):
     st.sidebar.markdown("<br>", unsafe_allow_html=True)
     if st.sidebar.button("🗑️ Fechar Análise e Voltar ao Início", use_container_width=True):
         st.session_state.clear()
+        st.session_state.app_mode = 'home'
         st.rerun()
 else:
     modo_analise = st.sidebar.radio("Selecione o nível de granularidade:", options=["🏙️ Intra-Município (Por Bairros)", "🗺️ Regional (Por Cidades)"])
@@ -395,6 +395,7 @@ else:
         st.markdown("<br>", unsafe_allow_html=True)
         if st.button("⬅️ Voltar ao Menu Inicial"):
             st.session_state.clear()
+            st.session_state.app_mode = 'home'
             st.rerun()
         st.stop()
 
@@ -403,12 +404,13 @@ excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
 map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
 df_vol_raw, gdf = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
-# DEFINIÇÃO CORRIGIDA DOS RÓTULOS (Evita o NameError)
+# DEFINIÇÃO SEGURA DOS RÓTULOS (Evita NameError em qualquer fluxo)
 lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
-# Inicializações extras caso falte na memória
+# Inicializações extras garantidas
 if 'simulacoes' not in st.session_state: st.session_state.simulacoes = {}
+if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
 if 'enderecos_bases' not in st.session_state: st.session_state.enderecos_bases = {}
 if 'erros_geocoding' not in st.session_state: st.session_state.erros_geocoding = []
@@ -897,7 +899,7 @@ with aba1:
 
     col_spacer, col_clear = st.columns([5, 2])
     with col_clear:
-        if not st.session_state.confirmar_reiniciar:
+        if not st.session_state.get('confirmar_reiniciar', False):
             if st.button("🔄 Reiniciar Simulação", use_container_width=True):
                 st.session_state.confirmar_reiniciar = True
                 st.rerun()

@@ -485,6 +485,15 @@ cidades_disponiveis = sorted(df_vol['Cidade'].unique())
 cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
+# Clear states when city changes
+if 'cidade_selecionada_prev' not in st.session_state:
+    st.session_state.cidade_selecionada_prev = cidade_selecionada
+elif st.session_state.cidade_selecionada_prev != cidade_selecionada:
+    st.session_state.regras_simulacao = []
+    if 'ia_resultado' in st.session_state:
+        del st.session_state['ia_resultado']
+    st.session_state.cidade_selecionada_prev = cidade_selecionada
+
 df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
 gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
@@ -700,7 +709,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
             zoom_helper = 8
 
     m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
-    Fullscreen(position="topright", title="Expand me", title_cancel="Exit me", force_separate_button=True).add_to(m_helper)
+    Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
     folium.GeoJson(
         gdf_cidade, 
         style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
@@ -788,7 +797,6 @@ def extrair_centroides_bairros(gdf_cidade):
 
 dict_bairros_centroides = extrair_centroides_bairros(gdf_cidade)
 
-
 def prepara_mapa_pontos(df_cenario):
     df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
         Volume=('Volume', 'sum'),
@@ -839,7 +847,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
 # Motor de Jittering e Geração de Mapas Folium
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter")
-    Fullscreen(position="topright", title="Expand me", title_cancel="Exit me", force_separate_button=True).add_to(m)
+    Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
     folium.GeoJson(
         gdf_mapa,
@@ -1098,173 +1106,88 @@ with aba2:
     bases_ativas_ia = st.multiselect("Selecione as bases que farão parte desta malha:", opcoes_ia, default=opcoes_ia[:2] if len(opcoes_ia) >= 2 else opcoes_ia)
     
     if bases_ativas_ia:
-        modo_ia = st.radio("Escolha o Método de Simulação:", ["🎯 A partir de % de Volume", "📦 A partir das Capacidades Informadas"], horizontal=True)
-        st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
-        
         df_ia_base = df_cidade_orig[df_cidade_orig['Transportadora'] != TAG_MISSORTING]
         total_volume_cidade = df_ia_base['Volume'].sum()
         total_vol_dia = total_volume_cidade / st.session_state.qtd_dias_analise
         
-        submit_ia = False
-        alocar_por_capacidade = False
+        st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
         
-        if modo_ia == "🎯 A partir de % de Volume":
-            with st.container():
-                st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
-                
-                porcentagem_disponivel = 100.0
-                cols_ia = st.columns(min(len(bases_ativas_ia), 4))
-                
-                for i, base in enumerate(bases_ativas_ia[:-1]):
-                    with cols_ia[i % 4]:
-                        slider_key = f"vol_slider_{base}"
+        with st.form("form_ia_capacidades"):
+            st.markdown(f"##### 📦 Configuração de Capacidades e Metas (Total da Região: **{total_vol_dia:,.0f} pacotes/dia**)")
+            st.write("Modifique as capacidades para este cenário caso necessário. Bases que superarem o total disponível enviarão os CEPs restantes para uma malha separada ('Regiões sem capacidade').")
+            
+            cols_cap = st.columns(min(len(bases_ativas_ia), 4))
+            for i, base in enumerate(bases_ativas_ia):
+                with cols_cap[i % 4]:
+                    cap_atual = st.session_state.capacidades_bases.get(base, 0)
+                    display_val = int(cap_atual) if cap_atual != float('inf') else 0
+                    st.number_input(f"Meta: {base} (pct/dia)", min_value=0, value=display_val, help="0 = Ilimitado" if cap_atual == float('inf') else "", key=f"cap_ia_{base}")
                         
-                        if slider_key not in st.session_state:
-                            st.session_state[slider_key] = 100 // len(bases_ativas_ia)
-                            
-                        if st.session_state[slider_key] > porcentagem_disponivel:
-                            st.session_state[slider_key] = int(porcentagem_disponivel)
-                            
-                        is_disabled = (porcentagem_disponivel <= 0)
-                        safe_max = int(porcentagem_disponivel) if not is_disabled else 100
-                        
-                        if is_disabled:
-                            st.session_state[slider_key] = 0
-                        
-                        val = st.slider(
-                            f"🎯 Meta: **{base}**", 
-                            min_value=0, 
-                            max_value=safe_max,
-                            value=int(st.session_state[slider_key]),
-                            format="%d%%",
-                            key=slider_key,
-                            disabled=is_disabled
-                        )
-                        
-                        if is_disabled:
-                            val = 0
-                            
-                        porcentagem_disponivel -= val
-                        
-                        vol_dia_projetado = total_vol_dia * (val / 100.0)
-                        cap_base = st.session_state.capacidades_bases.get(base, 0)
-                        
-                        if cap_base > 0 and cap_base != float('inf'):
-                            if vol_dia_projetado > cap_base:
-                                 st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
-                            else:
-                                 st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
-                        else:
-                             st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
-
-                base_final = bases_ativas_ia[-1]
-                val_final = max(0, porcentagem_disponivel)
-                    
-                st.session_state[f"vol_slider_{base_final}"] = val_final
-                
-                with cols_ia[(len(bases_ativas_ia)-1) % 4]:
-                    st.markdown(f"🎯 Meta: **{base_final}** (Automático)")
-                    st.info(f"**{val_final:.0f}%**")
-                    
-                    vol_dia_projetado = total_vol_dia * (val_final / 100.0)
-                    cap_base = st.session_state.capacidades_bases.get(base_final, 0)
-                    
-                    if cap_base > 0 and cap_base != float('inf'):
-                        if vol_dia_projetado > cap_base:
-                             st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
-                        else:
-                             st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
-                    else:
-                         st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                submit_ia = st.button("🚀 Processar IA (Alocação Radial %)", type="primary")
-
-        elif modo_ia == "📦 A partir das Capacidades Informadas":
-            with st.form("form_ia_capacidades"):
-                st.markdown("##### ⚙️ Revisão de Capacidade Operacional (Pacotes / Dia)")
-                st.write("Modifique as capacidades para este cenário caso necessário. Bases que superarem o total disponível enviarão os CEPs restantes para uma malha separada ('Regiões sem capacidade').")
-                
-                cols_cap = st.columns(min(len(bases_ativas_ia), 4))
-                for i, base in enumerate(bases_ativas_ia):
-                    with cols_cap[i % 4]:
-                        cap_atual = st.session_state.capacidades_bases.get(base, 0)
-                        display_val = int(cap_atual) if cap_atual != float('inf') else 0
-                        st.number_input(f"📦 Cap: {base}", min_value=0, value=display_val, help="0 = Ilimitado" if cap_atual == float('inf') else "", key=f"cap_ia_{base}")
-                            
-                st.markdown("<br>", unsafe_allow_html=True)
-                submit_ia = st.form_submit_button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
-                alocar_por_capacidade = True
-
-                if submit_ia:
-                    for base in bases_ativas_ia:
-                        nova_cap = st.session_state[f"cap_ia_{base}"]
-                        st.session_state.capacidades_bases[base] = float('inf') if nova_cap == 0 else nova_cap
+            st.markdown("<br>", unsafe_allow_html=True)
+            submit_ia = st.form_submit_button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
 
         if submit_ia:
-            with st.spinner("Mapeando volumes e otimizando matriz geodésica espacial..."):
-                try:
-                    if alocar_por_capacidade:
+            total_capacidades = sum([st.session_state[f"cap_ia_{b}"] for b in bases_ativas_ia])
+            
+            if total_capacidades > total_vol_dia:
+                st.error(f"🚨 **Erro:** A soma das capacidades configuradas ({total_capacidades:,.0f} pacotes/dia) excede o volume total da região ({total_vol_dia:,.0f} pacotes/dia). Reduza os valores para prosseguir.")
+            else:
+                for base in bases_ativas_ia:
+                    nova_cap = st.session_state[f"cap_ia_{base}"]
+                    st.session_state.capacidades_bases[base] = float('inf') if nova_cap == 0 else nova_cap
+
+                with st.spinner("Mapeando volumes e otimizando matriz geodésica espacial..."):
+                    try:
                         volume_alvo_pacotes = {}
                         for b in bases_ativas_ia:
                             c = st.session_state.capacidades_bases.get(b, float('inf'))
                             if c == 0: c = float('inf')
                             volume_alvo_pacotes[b] = c * st.session_state.qtd_dias_analise
-                    else:
-                        volume_alvo_pacotes = {b: total_volume_cidade * (st.session_state[f"vol_slider_{b}"]/100.0) for b in bases_ativas_ia}
-                    
-                    volume_atual = {b: 0 for b in bases_ativas_ia}
-                    
-                    bairros_info_dict = {}
-                    for _, row in df_ia_base.iterrows():
-                        cabeca = row['Cabeca_CEP']
-                        if cabeca not in bairros_info_dict:
-                            bairro = row['Join_Bairro']
-                            # We need coordinates for routing, but we want to jitter later for visualization
-                            # We use the centroid of the neighborhood for routing distances
-                            base_y, base_x = dict_bairros_centroides.get(bairro, (cy, cx))
-                            bairros_info_dict[cabeca] = {'Cabeca_CEP': cabeca, 'Vol': 0, 'lat': base_y, 'lon': base_x}
-                        bairros_info_dict[cabeca]['Vol'] += row['Volume']
+                        
+                        volume_atual = {b: 0 for b in bases_ativas_ia}
+                        
+                        bairros_info_dict = {}
+                        for _, row in df_ia_base.iterrows():
+                            cabeca = row['Cabeca_CEP']
+                            if cabeca not in bairros_info_dict:
+                                bairro = row['Join_Bairro']
+                                base_y, base_x = dict_bairros_centroides.get(bairro, (cy, cx))
+                                bairros_info_dict[cabeca] = {'Cabeca_CEP': cabeca, 'Vol': 0, 'lat': base_y, 'lon': base_x}
+                            bairros_info_dict[cabeca]['Vol'] += row['Volume']
+                                    
+                        bairros_info = list(bairros_info_dict.values())
+                        matriz_distancias = []
+                        
+                        for b_info in bairros_info:
+                            for base in bases_ativas_ia:
+                                base_coords = st.session_state.coords_bases.get(base, (cy, cx))
+                                dist = geodesic((b_info['lat'], b_info['lon']), base_coords).meters
+                                matriz_distancias.append((dist, b_info['Cabeca_CEP'], base, b_info['Vol']))
                                 
-                    bairros_info = list(bairros_info_dict.values())
-                    matriz_distancias = []
-                    
-                    base_loop = bases_ativas_ia if alocar_por_capacidade else bases_ativas_ia[:-1]
-                    
-                    for b_info in bairros_info:
-                        for base in base_loop:
-                            base_coords = st.session_state.coords_bases.get(base, (cy, cx))
-                            dist = geodesic((b_info['lat'], b_info['lon']), base_coords).meters
-                            matriz_distancias.append((dist, b_info['Cabeca_CEP'], base, b_info['Vol']))
-                            
-                    matriz_distancias.sort(key=lambda x: x[0])
-                    
-                    alocacao_ia = {}
-                    for dist, cabeca_id, base, vol in matriz_distancias:
-                        if cabeca_id in alocacao_ia: continue 
-                        if volume_atual[base] + vol <= volume_alvo_pacotes.get(base, float('inf')):
-                            alocacao_ia[cabeca_id] = base
-                            volume_atual[base] += vol
-                            
-                    cabecas_sem_dono = [b['Cabeca_CEP'] for b in bairros_info if b['Cabeca_CEP'] not in alocacao_ia]
-                    
-                    if not alocar_por_capacidade:
-                        for cabeca_id in cabecas_sem_dono:
-                            alocacao_ia[cabeca_id] = base_final
-                    else:
+                        matriz_distancias.sort(key=lambda x: x[0])
+                        
+                        alocacao_ia = {}
+                        for dist, cabeca_id, base, vol in matriz_distancias:
+                            if cabeca_id in alocacao_ia: continue 
+                            if volume_atual[base] + vol <= volume_alvo_pacotes.get(base, float('inf')):
+                                alocacao_ia[cabeca_id] = base
+                                volume_atual[base] += vol
+                                
+                        cabecas_sem_dono = [b['Cabeca_CEP'] for b in bairros_info if b['Cabeca_CEP'] not in alocacao_ia]
+                        
                         for cabeca_id in cabecas_sem_dono:
                             alocacao_ia[cabeca_id] = 'Regiões sem capacidade'
-                        
-                    regras_geradas = []
-                    for cabeca, base in alocacao_ia.items():
-                        regras_geradas.append({'tipo': 'Cabeca_CEP', 'origem': cabeca, 'destino': base})
+                            
+                        regras_geradas = []
+                        for cabeca, base in alocacao_ia.items():
+                            regras_geradas.append({'tipo': 'Cabeca_CEP', 'origem': cabeca, 'destino': base})
 
-                    st.session_state.ia_resultado = regras_geradas
-                    st.toast("✅ Malha Inteligente gerada com sucesso!")
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"Erro na geração da IA: {e}")
+                        st.session_state.ia_resultado = regras_geradas
+                        st.toast("✅ Malha Inteligente gerada com sucesso!")
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"Erro na geração da IA: {e}")
 
         if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
             st.markdown("---")
@@ -1348,7 +1271,7 @@ with aba3:
             
             limites_expandidos = {}
             if is_regional:
-                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
+                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
                 max_prefix_mun = df_cidade_oficial.groupby('municipio_limpo')['prefixo'].max().to_dict()
                 
                 prefix_to_mun = {}

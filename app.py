@@ -1,6 +1,4 @@
-import base64
-
-code = """import streamlit as st
+import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -326,12 +324,12 @@ if st.session_state.app_mode == 'home':
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("**✨ Nova Análise**\\n\\nInicie um projeto do zero.")
+        st.info("**✨ Nova Análise**\n\nInicie um projeto do zero.")
         if st.button("Iniciar Nova Análise", use_container_width=True):
             st.session_state.app_mode = 'new'
             st.rerun()
     with col2:
-        st.success("**📂 Carregar Análise Passada**\\n\\nContinue exatamente de onde parou importando seu backup (.zip).")
+        st.success("**📂 Carregar Análise Passada**\n\nContinue exatamente de onde parou importando seu backup (.zip).")
         if st.button("Carregar Backup (.zip)", use_container_width=True):
             st.session_state.app_mode = 'load'
             st.rerun()
@@ -391,7 +389,7 @@ st.sidebar.title("⚙️ Modo de Operação")
 
 if st.session_state.get('is_loaded_from_backup', False):
     modo_analise = st.session_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
-    st.sidebar.info(f"Modo Atual: **{modo_analise}**\\n\\n*(Sessão Carregada via Backup)*")
+    st.sidebar.info(f"Modo Atual: **{modo_analise}**\n\n*(Sessão Carregada via Backup)*")
     st.sidebar.success("✅ Arquivos de Volume e Mapas do IBGE restaurados automaticamente da memória.")
     st.sidebar.markdown("<br>", unsafe_allow_html=True)
     if st.sidebar.button("🗑️ Fechar Análise e Voltar ao Início", use_container_width=True):
@@ -468,7 +466,7 @@ for i, transp in enumerate(todas_transp):
 st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
 st.session_state.cores_transp['Oculto'] = 'transparent'
 st.session_state.cores_transp['Sem Atendimento'] = '#808080'
-st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b' # FIX: New dummy base color
+st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b' 
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
 df_vol = df_vol_raw.copy()
@@ -620,7 +618,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     erros.append(base)
                     continue
                 
-                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
+                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -741,7 +739,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
                 if not end.strip(): continue
-                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
+                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -815,13 +813,13 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
         
         with cols[i % len(cols)]:
             if cap == float('inf'):
-                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Ilimitado)*")
+                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
             elif cap == 0:
-                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Não informada)*")
+                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
             elif vdia <= cap:
-                st.success(f"🟢 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia")
+                st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
             else:
-                st.error(f"🔴 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia\\n**(Acima do limite)**")
+                st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
 # Motor de Jittering e Geração de Mapas Folium
@@ -1108,7 +1106,6 @@ with aba2:
                         if slider_key not in st.session_state:
                             st.session_state[slider_key] = 100 // len(bases_ativas_ia)
                             
-                        # Remove bug fix: Force state update safely before render
                         if st.session_state[slider_key] > porcentagem_disponivel:
                             st.session_state[slider_key] = int(porcentagem_disponivel)
                             
@@ -1199,7 +1196,7 @@ with aba2:
                 alocar_por_capacidade = True
 
         if submit_ia:
-            with st.spinner("Calculando matriz global de distâncias para todos os Cabeças de CEP..."):
+            with st.spinner("Mapeando volumes e otimizando matriz geodésica..."):
                 try:
                     if alocar_por_capacidade:
                         volume_alvo_pacotes = {}
@@ -1212,26 +1209,26 @@ with aba2:
                     
                     volume_atual = {b: 0 for b in bases_ativas_ia}
                     
-                    bairros_unicos = {}
-                    for _, row in gdf_cidade.iterrows():
-                        jb = row['Join_Bairro']
-                        if pd.notnull(row['geometry']) and jb not in bairros_unicos:
-                            c_y, c_x = row['geometry'].centroid.y, row['geometry'].centroid.x
-                            df_match = df_ia_base[df_ia_base['Join_Bairro'] == jb]
-                            for _, r_cep in df_match.iterrows():
-                                chave_ponto = f"{jb}_{r_cep['Cabeca_CEP']}"
-                                if chave_ponto not in bairros_unicos:
-                                    bairros_unicos[chave_ponto] = {'Bairro': jb, 'Cabeca_CEP': r_cep['Cabeca_CEP'], 'Vol': 0, 'lat': c_y, 'lon': c_x}
-                                bairros_unicos[chave_ponto]['Vol'] += r_cep['Volume']
-                                
-                    bairros_info = list(bairros_unicos.values())
+                    # --- NOVO LOOP OTIMIZADO DE ROTEIRIZAÇÃO O(M) ---
+                    # Agrupa todas as cabeças de CEP num único hash map muito rápido
+                    bairros_info_dict = {}
+                    for _, row in df_ia_base.iterrows():
+                        cabeca = row['Cabeca_CEP']
+                        if cabeca not in bairros_info_dict:
+                            bairro = row['Join_Bairro']
+                            coords = dict_bairros_centroides.get(bairro, (cy, cx))
+                            bairros_info_dict[cabeca] = {'Cabeca_CEP': cabeca, 'Vol': 0, 'lat': coords[0], 'lon': coords[1]}
+                        bairros_info_dict[cabeca]['Vol'] += row['Volume']
+                            
+                    bairros_info = list(bairros_info_dict.values())
                     matriz_distancias = []
                     
                     base_loop = bases_ativas_ia if alocar_por_capacidade else bases_ativas_ia[:-1]
                     
                     for b_info in bairros_info:
                         for base in base_loop:
-                            dist = geodesic((b_info['lat'], b_info['lon']), st.session_state.coords_bases[base]).meters
+                            base_coords = st.session_state.coords_bases.get(base, (cy, cx))
+                            dist = geodesic((b_info['lat'], b_info['lon']), base_coords).meters
                             matriz_distancias.append((dist, b_info['Cabeca_CEP'], base, b_info['Vol']))
                             
                     matriz_distancias.sort(key=lambda x: x[0])
@@ -1239,10 +1236,11 @@ with aba2:
                     alocacao_ia = {}
                     for dist, cabeca_id, base, vol in matriz_distancias:
                         if cabeca_id in alocacao_ia: continue 
-                        if volume_atual[base] + vol <= volume_alvo_pacotes[base]:
+                        if volume_atual[base] + vol <= volume_alvo_pacotes.get(base, float('inf')):
                             alocacao_ia[cabeca_id] = base
                             volume_atual[base] += vol
                             
+                    # CEPs que sobraram
                     cabecas_sem_dono = [b['Cabeca_CEP'] for b in bairros_info if b['Cabeca_CEP'] not in alocacao_ia]
                     
                     if not alocar_por_capacidade:
@@ -1339,7 +1337,7 @@ with aba3:
             
             limites_expandidos = {}
             if is_regional:
-                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
+                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
                 max_prefix_mun = df_cidade_oficial.groupby('municipio_limpo')['prefixo'].max().to_dict()
                 
                 prefix_to_mun = {}
@@ -1455,9 +1453,3 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
-"""
-
-with open("app.py", "w", encoding="utf-8") as f:
-    f.write(code)
-
-print("File written successfully.")

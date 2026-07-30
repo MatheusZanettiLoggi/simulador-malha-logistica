@@ -876,7 +876,8 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
-    m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter")
+    # OTIMIZAÇÃO: prefer_canvas=True força a renderização HTML5 ao invés de SVG, mil vezes mais leve para o navegador
+    m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
     folium.GeoJson(
@@ -893,7 +894,10 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
     idx_cep = cols.index(COLUNA_CEP)
     idx_transp = cols.index('Transportadora')
     idx_vol = cols.index('Volume')
+    idx_qtd_bases = cols.index('Qtd_Bases')
+    idx_parceiros = cols.index('Parceiros')
     
+    # OTIMIZAÇÃO O(N): Agrupamento nativo ultra-rápido no Python, sem usar Pandas boolean filter dentro do loop
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -920,10 +924,9 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
             lon_center = lon_cab + rng.normal(0, 0.003)
             
             qtd_real = len(rows)
-            parceiros_all = sorted(list(set([r[idx_transp] for r in rows])))
-            parceiros_str = ' + '.join(parceiros_all)
+            qtd_bases = row_ref[idx_qtd_bases]
+            parceiros_str = row_ref[idx_parceiros]
             siglas_parceiros = extrair_siglas(parceiros_str)
-            qtd_bases = len(parceiros_all)
             
             for idx, r_base in enumerate(rows):
                 transp = r_base[idx_transp]

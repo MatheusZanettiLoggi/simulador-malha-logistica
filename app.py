@@ -1,4 +1,6 @@
-import streamlit as st
+import base64
+
+code = """import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -52,19 +54,6 @@ def formatar_cep(cep):
     if len(cep_limpo) == 8:
         return f"{cep_limpo[:5]}-{cep_limpo[5:]}"
     return cep
-
-def misturar_cores(lista_hex):
-    r, g, b = 0, 0, 0
-    cores_validas = 0
-    for cor_hex in lista_hex:
-        cor_hex = cor_hex.lstrip('#')
-        if len(cor_hex) == 6:
-            r += int(cor_hex[0:2], 16)
-            g += int(cor_hex[2:4], 16)
-            b += int(cor_hex[4:6], 16)
-            cores_validas += 1
-    if cores_validas == 0: return '#333333'
-    return f"#{int(r/cores_validas):02x}{int(g/cores_validas):02x}{int(b/cores_validas):02x}"
 
 def extrair_siglas(parceiros_str):
     siglas = re.findall(r'\((.*?)\)', parceiros_str)
@@ -337,12 +326,12 @@ if st.session_state.app_mode == 'home':
     
     col1, col2 = st.columns(2)
     with col1:
-        st.info("**✨ Nova Análise**\n\nInicie um projeto do zero.")
+        st.info("**✨ Nova Análise**\\n\\nInicie um projeto do zero.")
         if st.button("Iniciar Nova Análise", use_container_width=True):
             st.session_state.app_mode = 'new'
             st.rerun()
     with col2:
-        st.success("**📂 Carregar Análise Passada**\n\nContinue exatamente de onde parou importando seu backup (.zip).")
+        st.success("**📂 Carregar Análise Passada**\\n\\nContinue exatamente de onde parou importando seu backup (.zip).")
         if st.button("Carregar Backup (.zip)", use_container_width=True):
             st.session_state.app_mode = 'load'
             st.rerun()
@@ -402,7 +391,7 @@ st.sidebar.title("⚙️ Modo de Operação")
 
 if st.session_state.get('is_loaded_from_backup', False):
     modo_analise = st.session_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
-    st.sidebar.info(f"Modo Atual: **{modo_analise}**\n\n*(Sessão Carregada via Backup)*")
+    st.sidebar.info(f"Modo Atual: **{modo_analise}**\\n\\n*(Sessão Carregada via Backup)*")
     st.sidebar.success("✅ Arquivos de Volume e Mapas do IBGE restaurados automaticamente da memória.")
     st.sidebar.markdown("<br>", unsafe_allow_html=True)
     if st.sidebar.button("🗑️ Fechar Análise e Voltar ao Início", use_container_width=True):
@@ -479,6 +468,7 @@ for i, transp in enumerate(todas_transp):
 st.session_state.cores_transp['Sem Dados / Divergência'] = '#333333'
 st.session_state.cores_transp['Oculto'] = 'transparent'
 st.session_state.cores_transp['Sem Atendimento'] = '#808080'
+st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b' # FIX: New dummy base color
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
 df_vol = df_vol_raw.copy()
@@ -558,9 +548,9 @@ transp_ativas = sorted(list(transp_ativas))
 
 def deve_pedir_capacidade(nome_base):
     nome_lower = str(nome_base).lower()
-    return not (nome_lower.startswith("agf") or nome_lower.startswith("correios"))
+    return not (nome_lower.startswith("agf") or nome_lower.startswith("correios") or nome_lower == "regiões sem capacidade")
 
-bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING]
+bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
 if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
     st.info("Para liberar o dashboard, insira o endereço de cada base. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação da base na análise.")
@@ -571,7 +561,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     idx_col = 0
     
     for base in transp_ativas:
-        if base == TAG_MISSORTING: continue
+        if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
         with cols[idx_col % 2]:
             st.markdown(f"**🏢 Sede: {base}**")
             if f"input_end_{base}" not in st.session_state:
@@ -630,7 +620,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     erros.append(base)
                     continue
                 
-                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
+                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -729,7 +719,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
         todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
         
         for base in todas_bases_projeto:
-            if base == TAG_MISSORTING: continue
+            if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
             st.markdown(f"**{base}**")
             is_ignored = base in st.session_state.bases_ignoradas
             ignorar = st.checkbox("❌ Removida (Missorting)", value=is_ignored, key=f"ignorar_edit_{base}")
@@ -751,7 +741,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
                 if not end.strip(): continue
-                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
+                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -818,18 +808,20 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     cols = st.columns(len(vol_por_base) if len(vol_por_base) > 0 else 1)
     for i, row in vol_por_base.iterrows():
         base = row['Transportadora']
+        if base == 'Regiões sem capacidade': continue
+        
         vdia = row['Vol_Dia']
         cap = st.session_state.capacidades_bases.get(base, 0)
         
         with cols[i % len(cols)]:
             if cap == float('inf'):
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
+                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Ilimitado)*")
             elif cap == 0:
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
+                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Não informada)*")
             elif vdia <= cap:
-                st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
+                st.success(f"🟢 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia")
             else:
-                st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
+                st.error(f"🔴 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia\\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
 # Motor de Jittering e Geração de Mapas Folium
@@ -884,7 +876,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None):
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
-            if base in transp_selecionadas_sidebar and base != TAG_MISSORTING:
+            if base in transp_selecionadas_sidebar and base != TAG_MISSORTING and base != 'Regiões sem capacidade':
                 cor_base = st.session_state.cores_transp.get(base, '#333333')
                 html_pino = f'''
                 <div style="
@@ -1023,6 +1015,7 @@ with aba1:
         with col_s2:
             opcoes_destino = sorted(df_vol['Transportadora'].unique())
             if TAG_MISSORTING not in opcoes_destino: opcoes_destino.append(TAG_MISSORTING)
+            if "Regiões sem capacidade" not in opcoes_destino: opcoes_destino.append("Regiões sem capacidade")
             destino = st.selectbox("2. Para a Transportadora:", opcoes_destino)
             
         with col_s3:
@@ -1047,7 +1040,7 @@ with aba1:
     col_m2, col_t2 = st.columns([3, 1])
     with col_m2:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
-        pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING}
+        pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
@@ -1085,58 +1078,83 @@ with aba1:
 
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
-    st.info("A IA alocará os Cabeças de CEP baseados na proximidade estrita com a base, crescendo de forma radial até bater a meta de pacotes alvo estabelecida. A última base receberá o excedente de volume da cidade automaticamente.")
+    st.info("A IA aloca os Cabeças de CEP de forma radial a partir da base garantindo a proximidade mínima.")
     
-    opcoes_ia = [b for b in transp_ativas if b != TAG_MISSORTING]
+    opcoes_ia = [b for b in transp_ativas if b != TAG_MISSORTING and b != 'Regiões sem capacidade']
     bases_ativas_ia = st.multiselect("Selecione as bases que farão parte desta malha:", opcoes_ia, default=opcoes_ia[:2] if len(opcoes_ia) >= 2 else opcoes_ia)
     
     if bases_ativas_ia:
-        with st.container():
-            st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
-            
-            df_ia_base = df_cidade_orig[df_cidade_orig['Transportadora'] != TAG_MISSORTING]
-            total_volume_cidade = df_ia_base['Volume'].sum()
-            total_vol_dia = total_volume_cidade / st.session_state.qtd_dias_analise
-            
-            porcentagem_disponivel = 100  # Inicia com 100% livre
-            cols_ia = st.columns(min(len(bases_ativas_ia), 4))
-            
-            for i, base in enumerate(bases_ativas_ia[:-1]):
-                with cols_ia[i % 4]:
-                    slider_key = f"vol_slider_{base}"
-                    
-                    # Inicializa se não existir
-                    if slider_key not in st.session_state:
-                        st.session_state[slider_key] = 100 // len(bases_ativas_ia)
+        modo_ia = st.radio("Escolha o Método de Simulação:", ["🎯 A partir de % de Volume", "📦 A partir das Capacidades Informadas"], horizontal=True)
+        st.markdown("<hr style='margin-top: 5px; margin-bottom: 15px;'>", unsafe_allow_html=True)
+        
+        df_ia_base = df_cidade_orig[df_cidade_orig['Transportadora'] != TAG_MISSORTING]
+        total_volume_cidade = df_ia_base['Volume'].sum()
+        total_vol_dia = total_volume_cidade / st.session_state.qtd_dias_analise
+        
+        submit_ia = False
+        alocar_por_capacidade = False
+        
+        if modo_ia == "🎯 A partir de % de Volume":
+            with st.container():
+                st.markdown("##### ⚙️ Configuração das Metas de Volume (%)")
+                
+                porcentagem_disponivel = 100.0
+                cols_ia = st.columns(min(len(bases_ativas_ia), 4))
+                
+                for i, base in enumerate(bases_ativas_ia[:-1]):
+                    with cols_ia[i % 4]:
+                        slider_key = f"vol_slider_{base}"
                         
-                    # Força o limite de forma segura na memória ANTES do slider
-                    if st.session_state[slider_key] > porcentagem_disponivel:
-                        st.session_state[slider_key] = porcentagem_disponivel
+                        if slider_key not in st.session_state:
+                            st.session_state[slider_key] = 100 // len(bases_ativas_ia)
+                            
+                        # Remove bug fix: Force state update safely before render
+                        if st.session_state[slider_key] > porcentagem_disponivel:
+                            st.session_state[slider_key] = int(porcentagem_disponivel)
+                            
+                        is_disabled = (porcentagem_disponivel <= 0)
+                        safe_max = int(porcentagem_disponivel) if not is_disabled else 100
                         
-                    safe_max = int(max(1, porcentagem_disponivel))
-                    is_disabled = (porcentagem_disponivel == 0)
-                    
-                    # Se estiver desabilitado, forçamos para 0
-                    if is_disabled:
-                        st.session_state[slider_key] = 0
-                    
-                    val = st.slider(
-                        f"🎯 Meta: **{base}**", 
-                        min_value=0, 
-                        max_value=safe_max,
-                        format="%d%%",
-                        key=slider_key,
-                        disabled=is_disabled
-                    )
-                    
-                    # Garantia contra inputs manuais que ultrapassem o total (via teclado)
-                    if is_disabled:
-                        val = 0
+                        if is_disabled:
+                            st.session_state[slider_key] = 0
                         
-                    porcentagem_disponivel -= val
+                        val = st.slider(
+                            f"🎯 Meta: **{base}**", 
+                            min_value=0, 
+                            max_value=safe_max,
+                            value=int(st.session_state[slider_key]),
+                            format="%d%%",
+                            key=slider_key,
+                            disabled=is_disabled
+                        )
+                        
+                        if is_disabled:
+                            val = 0
+                            
+                        porcentagem_disponivel -= val
+                        
+                        vol_dia_projetado = total_vol_dia * (val / 100.0)
+                        cap_base = st.session_state.capacidades_bases.get(base, 0)
+                        
+                        if cap_base > 0 and cap_base != float('inf'):
+                            if vol_dia_projetado > cap_base:
+                                 st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
+                            else:
+                                 st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
+                        else:
+                             st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
+
+                base_final = bases_ativas_ia[-1]
+                val_final = max(0, porcentagem_disponivel)
                     
-                    vol_dia_projetado = total_vol_dia * (val / 100.0)
-                    cap_base = st.session_state.capacidades_bases.get(base, 0)
+                st.session_state[f"vol_slider_{base_final}"] = val_final
+                
+                with cols_ia[(len(bases_ativas_ia)-1) % 4]:
+                    st.markdown(f"🎯 Meta: **{base_final}** (Automático)")
+                    st.info(f"**{val_final:.0f}%**")
+                    
+                    vol_dia_projetado = total_vol_dia * (val_final / 100.0)
+                    cap_base = st.session_state.capacidades_bases.get(base_final, 0)
                     
                     if cap_base > 0 and cap_base != float('inf'):
                         if vol_dia_projetado > cap_base:
@@ -1145,34 +1163,53 @@ with aba2:
                              st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
                     else:
                          st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                submit_ia = st.button("🚀 Processar IA (Alocação Radial %)", type="primary")
 
-            base_final = bases_ativas_ia[-1]
-            val_final = porcentagem_disponivel
+        elif modo_ia == "📦 A partir das Capacidades Informadas":
+            with st.container():
+                st.markdown("##### ⚙️ Revisão de Capacidade Operacional (Pacotes / Dia)")
+                st.write("Modifique as capacidades para este cenário. Bases que superarem o total disponível enviarão os CEPs restantes para uma malha separada ('Regiões sem capacidade').")
                 
-            st.session_state[f"vol_slider_{base_final}"] = val_final
-            
-            with cols_ia[(len(bases_ativas_ia)-1) % 4]:
-                st.markdown(f"🎯 Meta: **{base_final}** (Automático)")
-                st.info(f"**{val_final:.0f}%**")
-                
-                vol_dia_projetado = total_vol_dia * (val_final / 100.0)
-                cap_base = st.session_state.capacidades_bases.get(base_final, 0)
-                
-                if cap_base > 0 and cap_base != float('inf'):
-                    if vol_dia_projetado > cap_base:
-                         st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
-                    else:
-                         st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
-                else:
-                     st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            submit_ia = st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
+                cols_cap = st.columns(min(len(bases_ativas_ia), 4))
+                for i, base in enumerate(bases_ativas_ia):
+                    with cols_cap[i % 4]:
+                        cap_atual = st.session_state.capacidades_bases.get(base, 0)
+                        if cap_atual == float('inf'):
+                            display_val = 0
+                            label = "0 = Ilimitado"
+                        else:
+                            display_val = int(cap_atual)
+                            label = ""
+                            
+                        nova_cap = st.number_input(f"📦 Cap: {base}", min_value=0, value=display_val, help=label, key=f"cap_ia_{base}")
+                        
+                        if nova_cap == 0 and cap_atual == float('inf'):
+                            st.info("ℹ️ Atual: Ilimitado")
+                        elif nova_cap == 0:
+                            st.session_state.capacidades_bases[base] = 0
+                            st.info("ℹ️ Atual: Ilimitado")
+                        else:
+                            st.session_state.capacidades_bases[base] = nova_cap
+                            st.success(f"✅ Atual: {nova_cap} pct/dia")
+                            
+                st.markdown("<br>", unsafe_allow_html=True)
+                submit_ia = st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
+                alocar_por_capacidade = True
 
         if submit_ia:
             with st.spinner("Calculando matriz global de distâncias para todos os Cabeças de CEP..."):
                 try:
-                    volume_alvo_pacotes = {b: total_volume_cidade * (st.session_state[f"vol_slider_{b}"]/100.0) for b in bases_ativas_ia}
+                    if alocar_por_capacidade:
+                        volume_alvo_pacotes = {}
+                        for b in bases_ativas_ia:
+                            c = st.session_state.capacidades_bases.get(b, float('inf'))
+                            if c == 0: c = float('inf')
+                            volume_alvo_pacotes[b] = c * st.session_state.qtd_dias_analise
+                    else:
+                        volume_alvo_pacotes = {b: total_volume_cidade * (st.session_state[f"vol_slider_{b}"]/100.0) for b in bases_ativas_ia}
+                    
                     volume_atual = {b: 0 for b in bases_ativas_ia}
                     
                     bairros_unicos = {}
@@ -1189,8 +1226,11 @@ with aba2:
                                 
                     bairros_info = list(bairros_unicos.values())
                     matriz_distancias = []
+                    
+                    base_loop = bases_ativas_ia if alocar_por_capacidade else bases_ativas_ia[:-1]
+                    
                     for b_info in bairros_info:
-                        for base in bases_ativas_ia[:-1]:
+                        for base in base_loop:
                             dist = geodesic((b_info['lat'], b_info['lon']), st.session_state.coords_bases[base]).meters
                             matriz_distancias.append((dist, b_info['Cabeca_CEP'], base, b_info['Vol']))
                             
@@ -1203,10 +1243,14 @@ with aba2:
                             alocacao_ia[cabeca_id] = base
                             volume_atual[base] += vol
                             
-                    # A última base varre o que sobrou (Fechamento)
                     cabecas_sem_dono = [b['Cabeca_CEP'] for b in bairros_info if b['Cabeca_CEP'] not in alocacao_ia]
-                    for cabeca_id in cabecas_sem_dono:
-                        alocacao_ia[cabeca_id] = base_final
+                    
+                    if not alocar_por_capacidade:
+                        for cabeca_id in cabecas_sem_dono:
+                            alocacao_ia[cabeca_id] = base_final
+                    else:
+                        for cabeca_id in cabecas_sem_dono:
+                            alocacao_ia[cabeca_id] = 'Regiões sem capacidade'
                         
                     regras_geradas = []
                     for cabeca, base in alocacao_ia.items():
@@ -1234,7 +1278,7 @@ with aba2:
             col_ia_m, col_ia_t = st.columns([3, 1])
             with col_ia_m:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
-                pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING}
+                pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
@@ -1295,7 +1339,7 @@ with aba3:
             
             limites_expandidos = {}
             if is_regional:
-                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
+                df_cidade_oficial['prefixo'] = df_cidade_oficial[COLUNA_CEP].astype(str).str.replace(r'\\D', '', regex=True).str[:5].apply(lambda x: int(x) if x.isdigit() else 0)
                 max_prefix_mun = df_cidade_oficial.groupby('municipio_limpo')['prefixo'].max().to_dict()
                 
                 prefix_to_mun = {}
@@ -1411,3 +1455,9 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+"""
+
+with open("app.py", "w", encoding="utf-8") as f:
+    f.write(code)
+
+print("File written successfully.")

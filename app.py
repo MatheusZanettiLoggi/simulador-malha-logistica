@@ -1103,25 +1103,33 @@ with aba2:
             
             for i, base in enumerate(bases_ativas_ia[:-1]):
                 with cols_ia[i % 4]:
-                    atual = st.session_state.get(f"vol_slider_{base}", 100 // len(bases_ativas_ia))
-                    if atual > porcentagem_disponivel:
-                        atual = porcentagem_disponivel
-                        st.session_state[f"vol_slider_{base}"] = atual
-
-                    # Proteção contra o crash do Streamlit (min_value == max_value)
-                    safe_max = max(1, porcentagem_disponivel)
+                    slider_key = f"vol_slider_{base}"
+                    
+                    # Inicializa se não existir
+                    if slider_key not in st.session_state:
+                        st.session_state[slider_key] = 100 // len(bases_ativas_ia)
+                        
+                    # Força o limite de forma segura na memória ANTES do slider
+                    if st.session_state[slider_key] > porcentagem_disponivel:
+                        st.session_state[slider_key] = porcentagem_disponivel
+                        
+                    safe_max = int(max(1, porcentagem_disponivel))
                     is_disabled = (porcentagem_disponivel == 0)
+                    
+                    # Se estiver desabilitado, forçamos para 0
+                    if is_disabled:
+                        st.session_state[slider_key] = 0
                     
                     val = st.slider(
                         f"🎯 Meta: **{base}**", 
                         min_value=0, 
                         max_value=safe_max,
-                        value=atual,
                         format="%d%%",
-                        key=f"vol_slider_{base}",
+                        key=slider_key,
                         disabled=is_disabled
                     )
                     
+                    # Garantia contra inputs manuais que ultrapassem o total (via teclado)
                     if is_disabled:
                         val = 0
                         

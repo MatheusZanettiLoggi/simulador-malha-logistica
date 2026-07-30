@@ -15,6 +15,7 @@ import random
 import zipfile
 import numpy as np
 import hashlib
+from contextlib import contextmanager
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
@@ -37,6 +38,21 @@ st.markdown('''
     }
     </style>
 ''', unsafe_allow_html=True)
+
+# ---------------------------------------------------------
+# SISTEMA DE DIAGNÓSTICO DE PERFORMANCE (PROFILER)
+# ---------------------------------------------------------
+if 'perf_logs' not in st.session_state:
+    st.session_state.perf_logs = {}
+
+@contextmanager
+def timer(name):
+    start = time.time()
+    yield
+    end = time.time()
+    st.session_state.perf_logs[name] = f"{(end - start):.3f} segundos"
+
+# ---------------------------------------------------------
 
 COLUNA_CEP = 'Package ZIP'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
@@ -442,9 +458,10 @@ else:
             st.rerun()
         st.stop()
 
-excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
-map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
-df_vol_raw, gdf, qtd_dias = load_dados(excel_io, map_io, st.session_state.modo_analise)
+with timer("1. Carregamento de Base e Geometria"):
+    excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
+    map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
+    df_vol_raw, gdf, qtd_dias = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
 st.session_state.qtd_dias_analise = qtd_dias
 
@@ -481,7 +498,8 @@ st.session_state.cores_transp['Sem Atendimento'] = '#808080'
 st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b' 
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
-df_vol = otimizar_base_global(df_vol_raw, st.session_state.de_para_bairros)
+with timer("2. Limpeza e de_para global"):
+    df_vol = otimizar_base_global(df_vol_raw, st.session_state.de_para_bairros)
 
 st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
@@ -532,25 +550,26 @@ if divergentes:
 
 df_cidade_sim = df_cidade_orig.copy()
 
-for regra in st.session_state.regras_simulacao:
-    t = regra['tipo']
-    o = regra['origem']
-    d = regra['destino']
-    if t == "Base Completa (De ➔ Para)":
-        mask = (df_cidade_sim['Transportadora'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
-        df_cidade_sim.loc[mask, 'Transportadora'] = d
-    elif t == "Município":
-        mask = (df_cidade_sim['Cidade'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
-        df_cidade_sim.loc[mask, 'Transportadora'] = d
-    elif t == "Bairro":
-        mask = (df_cidade_sim['Bairro'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
-        df_cidade_sim.loc[mask, 'Transportadora'] = d
-    elif t == "Cabeça de CEP":
-        mask = (df_cidade_sim['Cabeca_CEP'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
-        df_cidade_sim.loc[mask, 'Transportadora'] = d
-    elif t == "CEP Específico":
-        mask = (df_cidade_sim[COLUNA_CEP] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
-        df_cidade_sim.loc[mask, 'Transportadora'] = d
+with timer("3. Motor de Regras Manuais"):
+    for regra in st.session_state.regras_simulacao:
+        t = regra['tipo']
+        o = regra['origem']
+        d = regra['destino']
+        if t == "Base Completa (De ➔ Para)":
+            mask = (df_cidade_sim['Transportadora'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
+            df_cidade_sim.loc[mask, 'Transportadora'] = d
+        elif t == "Município":
+            mask = (df_cidade_sim['Cidade'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
+            df_cidade_sim.loc[mask, 'Transportadora'] = d
+        elif t == "Bairro":
+            mask = (df_cidade_sim['Bairro'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
+            df_cidade_sim.loc[mask, 'Transportadora'] = d
+        elif t == "Cabeça de CEP":
+            mask = (df_cidade_sim['Cabeca_CEP'] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
+            df_cidade_sim.loc[mask, 'Transportadora'] = d
+        elif t == "CEP Específico":
+            mask = (df_cidade_sim[COLUNA_CEP] == o) & (df_cidade_sim['Transportadora'] != TAG_MISSORTING)
+            df_cidade_sim.loc[mask, 'Transportadora'] = d
 
 df_cidade_ia_temp = df_cidade_orig.copy()
 if 'ia_resultado' in st.session_state:
@@ -808,8 +827,16 @@ def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
-    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'], as_index=False)['Volume'].sum()
-    return df_pontos
+    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
+        Volume=('Volume', 'sum')
+    ).reset_index()
+    
+    df_agrupado = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
+        Qtd_Bases=('Transportadora', 'nunique'),
+        Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
+    ).reset_index()
+    
+    return pd.merge(df_pontos, df_agrupado, on=['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
 
 def get_visibilidade(transp):
     if transp == 'Sem Dados': return True
@@ -1015,8 +1042,9 @@ else:
     cy, cx = -15.7801, -47.9292 
 zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
-df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
-df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
+with timer("4. Prepara Pontos de Mapa"):
+    df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
+    df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
@@ -1028,7 +1056,8 @@ with aba1:
     with col_m1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
-        desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, map_key="mapa_cenario_atual", expandido=expandir_mapa)
+        with timer("5. Render Map Cenário Atual"):
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, map_key="mapa_cenario_atual", expandido=expandir_mapa)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1132,7 +1161,8 @@ with aba1:
     with col_m2:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
-        desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, map_key="mapa_cenario_simulado", expandido=expandir_mapa)
+        with timer("6. Render Map Cenário Simulado"):
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, map_key="mapa_cenario_simulado", expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1290,7 +1320,8 @@ with aba2:
             with col_ia_m:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
-                desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, map_key="mapa_cenario_ia", expandido=expandir_mapa)
+                with timer("7. Render Map Cenário IA"):
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, map_key="mapa_cenario_ia", expandido=expandir_mapa)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1332,11 +1363,12 @@ with aba3:
     else:
         st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}** para a análise regional.")
     
-    @st.cache_data(show_spinner="Baixando e cruzando a malha oficial dos Correios...")
-    def obter_df_estado(uf):
-        return carregar_ceps_estado(uf)
-        
-    df_estado = obter_df_estado(uf_automatica)
+    with timer("8. Processamento Malha Correios"):
+        @st.cache_data(show_spinner="Baixando e cruzando a malha oficial dos Correios...")
+        def obter_df_estado(uf):
+            return carregar_ceps_estado(uf)
+            
+        df_estado = obter_df_estado(uf_automatica)
         
     if not df_estado.empty:
         df_estado['municipio_limpo'] = df_estado['municipio'].apply(limpa_texto)
@@ -1409,69 +1441,85 @@ with aba3:
             df_range_orig = gerar_ranges_cep(df_oficial_orig, dict_limites=limites_expandidos, is_regional=is_regional)
             st.dataframe(df_range_orig, use_container_width=True, hide_index=True)
             
-            st.download_button(
-                label="📥 Baixar CEPs Cenário Atual (Excel)",
-                data=exportar_excel_formatado({"Cenario_Atual": df_range_orig}),
-                file_name=f"CEPs_Cenario_Atual.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            st.markdown("---")
-            st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
-            map_sim = df_cidade_sim.groupby(df_cidade_sim['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-            df_oficial_sim = df_cidade_oficial.copy()
-            df_oficial_sim['Transportadora'] = df_oficial_sim[chave_oficial].map(map_sim).fillna('Sem Atendimento')
-            if is_regional: df_oficial_sim = df_oficial_sim[df_oficial_sim['Transportadora'] != 'Sem Atendimento']
-            
-            df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
-            st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
-            
-            st.download_button(
-                label="📥 Baixar CEPs Cenário Simulado (Excel)",
-                data=exportar_excel_formatado({"Cenario_Simulado": df_range_sim}),
-                file_name=f"CEPs_Cenario_Simulado.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            
-            if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
-                st.markdown("---")
-                st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
-                map_ia = df_cidade_ia_temp.groupby(df_cidade_ia_temp['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-                df_oficial_ia = df_cidade_oficial.copy()
-                df_oficial_ia['Transportadora'] = df_oficial_ia[chave_oficial].map(map_ia).fillna('Sem Atendimento')
-                if is_regional: df_oficial_ia = df_oficial_ia[df_oficial_ia['Transportadora'] != 'Sem Atendimento']
-                
-                df_range_ia = gerar_ranges_cep(df_oficial_ia, dict_limites=limites_expandidos, is_regional=is_regional)
-                st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
-                
+            with timer("9. Geração de Planilhas Excel"):
                 st.download_button(
-                    label="📥 Baixar CEPs Cenário IA (Excel)",
-                    data=exportar_excel_formatado({"Cenario_IA": df_range_ia}),
-                    file_name=f"CEPs_Cenario_IA.xlsx",
+                    label="📥 Baixar CEPs Cenário Atual (Excel)",
+                    data=exportar_excel_formatado(dict({'Cenario_Atual': df_range_orig})),
+                    file_name=f"CEPs_Cenario_Atual.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
                 
-            st.markdown("---")
-            st.markdown("### 🗂️ Exportar Resultados Consolidados")
-            st.write("Baixe todas as tabelas (Volume e Ranges) juntas em um único arquivo Excel multipáginas formatado.")
+                st.markdown("---")
+                st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
+                map_sim = df_cidade_sim.groupby(df_cidade_sim['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+                df_oficial_sim = df_cidade_oficial.copy()
+                df_oficial_sim['Transportadora'] = df_oficial_sim[chave_oficial].map(map_sim).fillna('Sem Atendimento')
+                if is_regional: df_oficial_sim = df_oficial_sim[df_oficial_sim['Transportadora'] != 'Sem Atendimento']
+                
+                df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
+                st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
+                
+                st.download_button(
+                    label="📥 Baixar CEPs Cenário Simulado (Excel)",
+                    data=exportar_excel_formatado(dict({'Cenario_Simulado': df_range_sim})),
+                    file_name=f"CEPs_Cenario_Simulado.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                
+                if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
+                    st.markdown("---")
+                    st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
+                    map_ia = df_cidade_ia_temp.groupby(df_cidade_ia_temp['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+                    df_oficial_ia = df_cidade_oficial.copy()
+                    df_oficial_ia['Transportadora'] = df_oficial_ia[chave_oficial].map(map_ia).fillna('Sem Atendimento')
+                    if is_regional: df_oficial_ia = df_oficial_ia[df_oficial_ia['Transportadora'] != 'Sem Atendimento']
+                    
+                    df_range_ia = gerar_ranges_cep(df_oficial_ia, dict_limites=limites_expandidos, is_regional=is_regional)
+                    st.dataframe(df_range_ia, use_container_width=True, hide_index=True)
+                    
+                    st.download_button(
+                        label="📥 Baixar CEPs Cenário IA (Excel)",
+                        data=exportar_excel_formatado(dict({'Cenario_IA': df_range_ia})),
+                        file_name=f"CEPs_Cenario_IA.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+                    
+                st.markdown("---")
+                st.markdown("### 🗂️ Exportar Resultados Consolidados")
+                st.write("Baixe todas as tabelas (Volume e Ranges) juntas em um único arquivo Excel multipáginas formatado.")
 
-            dict_completo = {
-                'Volume_Atual': gerar_tabela(df_cidade_orig),
-                'Volume_Simulado': gerar_tabela(df_cidade_sim),
-                'CEPs_Atual': df_range_orig,
-                'CEPs_Simulado': df_range_sim
-            }
-            if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
-                dict_completo['Volume_IA'] = gerar_tabela(df_cidade_ia_temp)
-                dict_completo['CEPs_IA'] = df_range_ia
+                dict_completo = {
+                    'Volume_Atual': gerar_tabela(df_cidade_orig),
+                    'Volume_Simulado': gerar_tabela(df_cidade_sim),
+                    'CEPs_Atual': df_range_orig,
+                    'CEPs_Simulado': df_range_sim
+                }
+                if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
+                    dict_completo['Volume_IA'] = gerar_tabela(df_cidade_ia_temp)
+                    dict_completo['CEPs_IA'] = df_range_ia
 
-            st.download_button(
-                label="📊 Baixar Relatório Completo (Análise Completa.xlsx)",
-                data=exportar_excel_formatado(dict_completo),
-                file_name=f"Analise_Completa_{limpa_texto(cidade_selecionada)}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+                st.download_button(
+                    label="📊 Baixar Relatório Completo (Análise Completa.xlsx)",
+                    data=exportar_excel_formatado(dict_completo),
+                    file_name=f"Analise_Completa_{limpa_texto(cidade_selecionada)}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+
+
+# ---------------------------------------------------------
+# RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)
+# ---------------------------------------------------------
+st.sidebar.markdown("---")
+with st.sidebar.expander("⏱️ Diagnóstico de Performance", expanded=False):
+    st.write("Baixe o arquivo abaixo e envie para a avaliação do gargalo de processamento.")
+    log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
+    st.download_button(
+        label="📥 Baixar log_performance.json",
+        data=log_json,
+        file_name="log_performance.json",
+        mime="application/json"
+    )

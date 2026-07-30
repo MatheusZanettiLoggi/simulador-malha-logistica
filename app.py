@@ -108,6 +108,18 @@ def gerar_tabela_detalhada(df_cidade_tabela, rotulo_local):
         
     return vol_detalhe.sort_values(['Transportadora', 'Volume'], ascending=[True, False])
 
+def gerar_legenda(transp_presentes):
+    st.markdown("<br>**Legenda de Cores:**", unsafe_allow_html=True)
+    legenda = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px;'>"
+    for transp in transp_presentes:
+        if transp == 'Múltiplas Bases':
+            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: transparent; border-radius: 4px; border: 2px dashed #e74c3c; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>Sobreposição (!)</span></div>"
+        else:
+            cor = st.session_state.cores_transp.get(transp, '#333333')
+            legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{transp}</span></div>"
+    legenda += "</div>"
+    st.markdown(legenda, unsafe_allow_html=True)
+
 def exportar_excel_formatado(df_dict):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -262,7 +274,6 @@ def carregar_ceps_estado(uf):
 def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
-    # Validação e Cálculo de Dias da Análise
     qtd_dias = 30
     if 'Package Promised Date' in df.columns:
         try:
@@ -297,7 +308,6 @@ def load_dados(excel_file, zip_file, modo):
     gdf = gpd.read_file('zip://temp_mapa.zip')
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
-    # Mantendo a granularidade a nível de CEP Específico
     if modo == "🏙️ Intra-Município (Por Bairros)":
         df_vol = df.groupby(['Package Destination City', 'Package Destination Neighborhood', 'Package Last Mile Company Name', COLUNA_CEP])['Package # Packages'].sum().reset_index()
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
@@ -1108,12 +1118,11 @@ with aba2:
             
             for i, base in enumerate(bases_ativas_ia[:-1]):
                 with cols_ia[i % 4]:
-                    # Slider independente
                     val = st.slider(
                         f"🎯 Meta: **{base}**", 
                         min_value=0, 
                         max_value=100, 
-                        value=int(st.session_state.get(f"vol_slider_{base}", 0)),
+                        value=int(st.session_state.get(f"vol_slider_{base}", 100 // len(bases_ativas_ia))),
                         format="%d%%",
                         key=f"vol_slider_{base}"
                     )
@@ -1127,7 +1136,6 @@ with aba2:
                     else:
                          st.caption(f"Proj: {vol_dia_projetado:,.0f} pacotes/dia")
 
-            # A última base recebe o resto
             base_final = bases_ativas_ia[-1]
             if total_alocado_manual > 100:
                 st.error("⚠️ A soma das porcentagens ultrapassou 100%. Por favor, reduza os valores acima.")

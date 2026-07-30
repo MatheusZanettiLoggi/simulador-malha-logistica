@@ -1,4 +1,4 @@
-import streamlit as st
+code = """import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -252,6 +252,19 @@ def carregar_ceps_estado(uf):
     return pd.DataFrame()
 
 @st.cache_data
+def otimizar_base_global(df_raw, de_para_dict):
+    df = df_raw.copy()
+    df['Bairro'] = df['Bairro'].apply(lambda x: de_para_dict.get(x, x))
+    df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
+    df['Bairro'] = df['Bairro'].astype(str).str.title()
+    
+    # Otimização do mode()
+    modes = df.groupby('Join_Bairro')['Bairro'].agg(lambda x: x.mode()[0] if not x.empty else x.iloc[0]).to_dict()
+    df['Bairro'] = df['Join_Bairro'].map(modes)
+    
+    return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
+
+@st.cache_data
 def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
@@ -468,12 +481,7 @@ st.session_state.cores_transp['Sem Atendimento'] = '#808080'
 st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b' 
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
-df_vol = df_vol_raw.copy()
-df_vol['Bairro'] = df_vol['Bairro'].apply(lambda x: st.session_state.de_para_bairros.get(x, x))
-df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
-df_vol['Bairro'] = df_vol['Bairro'].astype(str).str.title()
-df_vol['Bairro'] = df_vol.groupby('Join_Bairro')['Bairro'].transform(lambda x: x.mode()[0] if not x.empty else x)
-df_vol = df_vol.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
+df_vol = otimizar_base_global(df_vol_raw, st.session_state.de_para_bairros)
 
 st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
@@ -638,7 +646,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     erros.append(base)
                     continue
                 
-                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
+                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -760,7 +768,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
                 if not end.strip(): continue
-                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
+                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -800,6 +808,7 @@ def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
     base_y, base_x = dict_centroides.get(bairro_id, (cy, cx))
     return base_y, base_x
 
+@st.cache_data
 def prepara_mapa_pontos(df_cenario):
     # Agrupa mantendo a Transportadora para exibir pontos separados para bases na mesma cabeça de cep
     df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
@@ -844,13 +853,13 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
         
         with cols[i % len(cols)]:
             if cap == float('inf'):
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
+                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Ilimitado)*")
             elif cap == 0:
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
+                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Não informada)*")
             elif vdia <= cap:
-                st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
+                st.success(f"🟢 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia")
             else:
-                st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
+                st.error(f"🔴 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia\\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
 # Motor de Jittering e Geração de Mapas Folium
@@ -1084,15 +1093,20 @@ with aba1:
         tipo_sim = st.selectbox("1. Nível de Migração:", ["Base Completa (De ➔ Para)", "Município", "Bairro", "Cabeça de CEP", "CEP Específico"])
         
         if tipo_sim == "Base Completa (De ➔ Para)":
-            origem = st.selectbox("Selecione a Base de Origem:", sorted([b for b in df_cidade_sim['Transportadora'].unique() if b != TAG_MISSORTING]))
+            opcoes_origem = sorted([b for b in df_cidade_sim['Transportadora'].unique() if b != TAG_MISSORTING])
+            origem = st.multiselect("Selecione a(s) Base(s) de Origem:", opcoes_origem)
         elif tipo_sim == "Município":
-            origem = st.selectbox("Selecione o Município:", sorted(df_cidade_sim['Cidade'].unique()))
+            opcoes_origem = sorted(df_cidade_sim['Cidade'].unique())
+            origem = st.multiselect("Selecione o(s) Município(s):", opcoes_origem)
         elif tipo_sim == "Bairro":
-            origem = st.selectbox("Selecione o Bairro:", sorted(df_cidade_sim['Bairro'].unique()))
+            opcoes_origem = sorted(df_cidade_sim['Bairro'].unique())
+            origem = st.multiselect("Selecione o(s) Bairro(s):", opcoes_origem)
         elif tipo_sim == "Cabeça de CEP":
-            origem = st.selectbox("Selecione a Cabeça de CEP:", sorted(df_cidade_sim['Cabeca_CEP'].unique()))
+            opcoes_origem = sorted(df_cidade_sim['Cabeca_CEP'].unique())
+            origem = st.multiselect("Selecione a(s) Cabeça(s) de CEP:", opcoes_origem)
         elif tipo_sim == "CEP Específico":
-            origem = st.selectbox("Selecione o CEP:", sorted(df_cidade_sim[COLUNA_CEP].unique()))
+            opcoes_origem = sorted(df_cidade_sim[COLUNA_CEP].unique())
+            origem = st.multiselect("Selecione o(s) CEP(s):", opcoes_origem)
 
     with col_s2:
         opcoes_destino = sorted(df_vol['Transportadora'].unique())
@@ -1105,9 +1119,13 @@ with aba1:
         btn_add_regra = st.button("Aplicar mudanças", type="primary", use_container_width=True)
         
     if btn_add_regra:
-        nova_regra = {'tipo': tipo_sim, 'origem': origem, 'destino': destino}
-        st.session_state.regras_simulacao.append(nova_regra)
-        st.rerun()
+        if origem:
+            for o in origem:
+                nova_regra = {'tipo': tipo_sim, 'origem': o, 'destino': destino}
+                st.session_state.regras_simulacao.append(nova_regra)
+            st.rerun()
+        else:
+            st.warning("Selecione ao menos uma origem para aplicar.")
 
     if st.session_state.regras_simulacao:
         if st.button("🗑️ Desfazer todas as mudanças (Reiniciar Simulador)"):
@@ -1462,3 +1480,9 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+"""
+
+with open("app.py", "w", encoding="utf-8") as f:
+    f.write(code)
+
+print("File written successfully.")

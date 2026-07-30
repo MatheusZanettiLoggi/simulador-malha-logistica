@@ -3,7 +3,7 @@ import pandas as pd
 import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen
-from streamlit_folium import st_folium
+from streamlit_folium import folium_static, st_folium
 import streamlit.components.v1 as components
 import unicodedata
 import difflib
@@ -15,6 +15,7 @@ import io
 import random
 import zipfile
 import numpy as np
+import hashlib
 from contextlib import contextmanager
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
@@ -876,7 +877,6 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
-    # OTIMIZAÇÃO: prefer_canvas=True força a renderização HTML5 ao invés de SVG, mil vezes mais leve para o navegador
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -897,7 +897,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
     idx_qtd_bases = cols.index('Qtd_Bases')
     idx_parceiros = cols.index('Parceiros')
     
-    # OTIMIZAÇÃO O(N): Agrupamento nativo ultra-rápido no Python, sem usar Pandas boolean filter dentro do loop
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -919,13 +918,15 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
             h_cep = hash(str(cep))
-            lat_center = lat_cab + (((h_cep % 100) / 100.0) - 0.5) * 0.006
-            lon_center = lon_cab + ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
+            rng = np.random.RandomState(h_cep % (2**32 - 1))
+            lat_center = lat_cab + rng.normal(0, 0.003)
+            lon_center = lon_cab + rng.normal(0, 0.003)
             
             qtd_real = len(rows)
-            qtd_bases = row_ref[idx_qtd_bases]
-            parceiros_str = row_ref[idx_parceiros]
+            parceiros_all = sorted(list(set([r[idx_transp] for r in rows])))
+            parceiros_str = ' + '.join(parceiros_all)
             siglas_parceiros = extrair_siglas(parceiros_str)
+            qtd_bases = len(parceiros_all)
             
             for idx, r_base in enumerate(rows):
                 transp = r_base[idx_transp]
@@ -997,7 +998,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                     icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
                 ).add_to(m)
             
-    import streamlit.components.v1 as components
     html_data = m.get_root().render()
     if expandido:
         components.html(html_data, height=800)

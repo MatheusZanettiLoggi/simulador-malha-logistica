@@ -3,7 +3,7 @@ import pandas as pd
 import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen
-from streamlit_folium import folium_static, st_folium
+from streamlit_folium import st_folium
 import streamlit.components.v1 as components
 import unicodedata
 import difflib
@@ -766,10 +766,9 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
         for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
             st.markdown(f"**{base}**")
-            is_ignored = base in st.session_state.bases_ignoradas
-            ignorar = st.checkbox("❌ Removida (Missorting)", value=is_ignored, key=f"ignorar_edit_{base}")
+            is_ignored = st.checkbox("❌ Removida (Missorting)", value=(base in st.session_state.bases_ignoradas), key=f"ignorar_edit_{base}")
             
-            if not ignorar:
+            if not is_ignored:
                 val_atual = st.session_state.enderecos_bases.get(base, "")
                 cap_atual = st.session_state.capacidades_bases.get(base, 0)
                 novos_ends_sidebar[base] = st.text_input(f"Endereço", value=val_atual, key=f"end_edit_{base}", label_visibility="collapsed")
@@ -877,6 +876,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
+    # OTIMIZACAO EXTREMA DE VELOCIDADE COM HTML NATIVO DO FOLIUM
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -901,15 +901,16 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
-        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
-        
         cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
         pontos_por_cep[cep].append(row)
         
+    siglas_cache = {}
+    markers_data = []
+    
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
         bairro_id = row_ref[idx_bairro_id]
@@ -917,16 +918,18 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
-            h_cep = hash(str(cep))
-            rng = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = lat_cab + rng.normal(0, 0.003)
-            lon_center = lon_cab + rng.normal(0, 0.003)
+            # Fast pseudo-random generator
+            h_cep = hash(cep)
+            lat_center = lat_cab + (((h_cep % 1000) / 1000.0) - 0.5) * 0.006
+            lon_center = lon_cab + ((((h_cep // 1000) % 1000) / 1000.0) - 0.5) * 0.006
             
             qtd_real = len(rows)
-            parceiros_all = sorted(list(set([r[idx_transp] for r in rows])))
-            parceiros_str = ' + '.join(parceiros_all)
-            siglas_parceiros = extrair_siglas(parceiros_str)
-            qtd_bases = len(parceiros_all)
+            qtd_bases = row_ref[idx_qtd_bases]
+            parceiros_str = row_ref[idx_parceiros]
+            
+            if parceiros_str not in siglas_cache:
+                siglas_cache[parceiros_str] = extrair_siglas(parceiros_str)
+            siglas_parceiros = siglas_cache[parceiros_str]
             
             for idx, r_base in enumerate(rows):
                 transp = r_base[idx_transp]
@@ -945,32 +948,32 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                     html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
 
                 if qtd_real == 1:
-                    folium.CircleMarker(
-                        location=[lat_center, lon_center],
-                        radius=4,
-                        color='white',
-                        weight=0.5,
-                        fill=True,
-                        fillColor=cor,
-                        fillOpacity=0.9,
-                        tooltip=folium.Tooltip(html_tooltip)
-                    ).add_to(m)
+                    markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
                 else:
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
                     lon_pino = lon_center + offset_r * np.sin(angle)
-                    
-                    folium.CircleMarker(
-                        location=[lat_pino, lon_pino],
-                        radius=3,
-                        color='white',
-                        weight=0.5,
-                        fill=True,
-                        fillColor=cor,
-                        fillOpacity=0.9,
-                        tooltip=folium.Tooltip(html_tooltip)
-                    ).add_to(m)
+                    markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+
+    # INJEÇÃO JS NATIVA (V8 ENGINE DO BROWSER)
+    map_id = m.get_name()
+    js_script = f"""
+    var markers_data = {json.dumps(markers_data)};
+    for (var i=0; i<markers_data.length; i++) {{
+        var m_data = markers_data[i];
+        var marker = L.circleMarker([m_data[0], m_data[1]], {{
+            radius: m_data[3],
+            color: 'white',
+            weight: 0.5,
+            fill: true,
+            fillColor: m_data[2],
+            fillOpacity: 0.9
+        }}).addTo({map_id});
+        marker.bindTooltip(m_data[4]);
+    }}
+    """
+    m.get_root().script.add_child(folium.Element(js_script))
 
     if pinos_bases:
         for base, coords in pinos_bases.items():

@@ -103,6 +103,7 @@ def gerar_tabela_detalhada(df_cidade_tabela, rotulo_local):
         
     return vol_detalhe.sort_values(['Transportadora', 'Volume'], ascending=[True, False])
 
+@st.cache_data(show_spinner=False)
 def exportar_excel_formatado(df_dict):
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -1087,37 +1088,38 @@ with aba1:
     
     st.markdown("#### Simulação de Troca Manual")
     
-    col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
-    
-    with col_s1:
-        tipo_sim = st.selectbox("1. Nível de Migração:", ["Base Completa (De ➔ Para)", "Município", "Bairro", "Cabeça de CEP", "CEP Específico"])
-        
-        if tipo_sim == "Base Completa (De ➔ Para)":
-            opcoes_origem = sorted([b for b in df_cidade_sim['Transportadora'].unique() if b != TAG_MISSORTING])
-            origem = st.multiselect("Selecione a(s) Base(s) de Origem:", opcoes_origem)
-        elif tipo_sim == "Município":
-            opcoes_origem = sorted(df_cidade_sim['Cidade'].unique())
-            origem = st.multiselect("Selecione o(s) Município(s):", opcoes_origem)
-        elif tipo_sim == "Bairro":
-            opcoes_origem = sorted(df_cidade_sim['Bairro'].unique())
-            origem = st.multiselect("Selecione o(s) Bairro(s):", opcoes_origem)
-        elif tipo_sim == "Cabeça de CEP":
-            opcoes_origem = sorted(df_cidade_sim['Cabeca_CEP'].unique())
-            origem = st.multiselect("Selecione a(s) Cabeça(s) de CEP:", opcoes_origem)
-        elif tipo_sim == "CEP Específico":
-            opcoes_origem = sorted(df_cidade_sim[COLUNA_CEP].unique())
-            origem = st.multiselect("Selecione o(s) CEP(s):", opcoes_origem)
+    tipo_sim = st.selectbox("1. Nível de Migração:", ["Base Completa (De ➔ Para)", "Município", "Bairro", "Cabeça de CEP", "CEP Específico"])
 
-    with col_s2:
-        opcoes_destino = sorted(df_vol['Transportadora'].unique())
-        if TAG_MISSORTING not in opcoes_destino: opcoes_destino.append(TAG_MISSORTING)
-        if "Regiões sem capacidade" not in opcoes_destino: opcoes_destino.append("Regiões sem capacidade")
-        destino = st.selectbox("2. Para a Transportadora:", opcoes_destino)
+    with st.form("form_troca_manual_cascata"):
+        col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
         
-    with col_s3:
-        st.markdown("<br><br>", unsafe_allow_html=True)
-        btn_add_regra = st.button("Aplicar mudanças", type="primary", use_container_width=True)
-        
+        with col_s1:
+            if tipo_sim == "Base Completa (De ➔ Para)":
+                opcoes_origem = sorted([b for b in df_cidade_sim['Transportadora'].unique() if b != TAG_MISSORTING])
+                origem = st.multiselect("Selecione a(s) Base(s) de Origem:", opcoes_origem)
+            elif tipo_sim == "Município":
+                opcoes_origem = sorted(df_cidade_sim['Cidade'].unique())
+                origem = st.multiselect("Selecione o(s) Município(s):", opcoes_origem)
+            elif tipo_sim == "Bairro":
+                opcoes_origem = sorted(df_cidade_sim['Bairro'].unique())
+                origem = st.multiselect("Selecione o(s) Bairro(s):", opcoes_origem)
+            elif tipo_sim == "Cabeça de CEP":
+                opcoes_origem = sorted(df_cidade_sim['Cabeca_CEP'].unique())
+                origem = st.multiselect("Selecione a(s) Cabeça(s) de CEP:", opcoes_origem)
+            elif tipo_sim == "CEP Específico":
+                opcoes_origem = sorted(df_cidade_sim[COLUNA_CEP].unique())
+                origem = st.multiselect("Selecione o(s) CEP(s):", opcoes_origem)
+
+        with col_s2:
+            opcoes_destino = sorted(df_vol['Transportadora'].unique())
+            if TAG_MISSORTING not in opcoes_destino: opcoes_destino.append(TAG_MISSORTING)
+            if "Regiões sem capacidade" not in opcoes_destino: opcoes_destino.append("Regiões sem capacidade")
+            destino = st.selectbox("2. Para a Transportadora:", opcoes_destino)
+            
+        with col_s3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_add_regra = st.form_submit_button("Aplicar mudanças", type="primary", use_container_width=True)
+            
     if btn_add_regra:
         if origem:
             for o in origem:
@@ -1416,7 +1418,7 @@ with aba3:
             
             st.download_button(
                 label="📥 Baixar CEPs Cenário Atual (Excel)",
-                data=exportar_excel_formatado({"Cenario_Atual": df_range_orig}),
+                data=exportar_excel_formatado(dict({'Cenario_Atual': df_range_orig})),
                 file_name=f"CEPs_Cenario_Atual.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -1433,7 +1435,7 @@ with aba3:
             
             st.download_button(
                 label="📥 Baixar CEPs Cenário Simulado (Excel)",
-                data=exportar_excel_formatado({"Cenario_Simulado": df_range_sim}),
+                data=exportar_excel_formatado(dict({'Cenario_Simulado': df_range_sim})),
                 file_name=f"CEPs_Cenario_Simulado.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -1451,7 +1453,7 @@ with aba3:
                 
                 st.download_button(
                     label="📥 Baixar CEPs Cenário IA (Excel)",
-                    data=exportar_excel_formatado({"Cenario_IA": df_range_ia}),
+                    data=exportar_excel_formatado(dict({'Cenario_IA': df_range_ia})),
                     file_name=f"CEPs_Cenario_IA.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )

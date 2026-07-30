@@ -845,14 +845,18 @@ def extrair_centroides_bairros(gdf_cidade):
     dict_centroids = {}
     for _, row in gdf_cidade.iterrows():
         if pd.notnull(row['geometry']):
-            dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+            bounds = row['geometry'].bounds
+            dict_centroids[row['Join_Bairro']] = (
+                row['geometry'].centroid.y,
+                row['geometry'].centroid.x,
+                bounds[1], # miny
+                bounds[3], # maxy
+                bounds[0], # minx
+                bounds[2]  # maxx
+            )
     return dict_centroids
 
 dict_bairros_centroides = extrair_centroides_bairros(gdf_cidade)
-
-def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
-    base_y, base_x = dict_centroides.get(bairro_id, (cy, cx))
-    return base_y, base_x
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
@@ -943,12 +947,19 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         bairro_id = row_ref[idx_bairro_id]
         
         if bairro_id in dict_bairros_centroides:
-            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
+            lat_cab, lon_cab, miny, maxy, minx, maxx = dict_bairros_centroides[bairro_id]
             
+            # Espalhamento ORGÂNICO por toda a extensão da caixa delimitadora do bairro
             h_cep = hash(cep)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = lat_cab + rng.normal(0, 0.003)
-            lon_center = lon_cab + rng.normal(0, 0.003)
+            
+            lat_span = maxy - miny
+            lon_span = maxx - minx
+            if lat_span == 0: lat_span = 0.001
+            if lon_span == 0: lon_span = 0.001
+            
+            lat_center = rng.uniform(miny + lat_span*0.05, maxy - lat_span*0.05)
+            lon_center = rng.uniform(minx + lon_span*0.05, maxx - lon_span*0.05)
             
             qtd_real = len(rows)
             qtd_bases = row_ref[idx_qtd_bases]
@@ -969,6 +980,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                 if qtd_real == 1:
                     markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
                 else:
+                    # Deslocamento minúsculo para mostrar as duas cores juntas do mesmo CEP (Jittering de sobreposição)
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
@@ -1003,7 +1015,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                     tooltip=f"🏢 Sede: {base}",
                     icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
                 ).add_to(m)
-
+            
     if expandido:
         folium_static(m, width=1200, height=800)
     else:

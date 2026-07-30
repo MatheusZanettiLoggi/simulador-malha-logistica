@@ -654,7 +654,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     submit_enderecos = st.button("Localizar Bases e Iniciar Simulador 🚀", type="primary", use_container_width=True)
         
     if submit_enderecos:
-        with st.spinner("Analisando coordenadas e atualizando capacidades..."):
+        with st.spinner("Analisando coordenadas e atualizando capacities..."):
             erros = []
             for base in novos_enderecos:
                 st.session_state.capacidades_bases[base] = novas_capacidades[base]
@@ -899,10 +899,8 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
-        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
-        
         cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
@@ -917,6 +915,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
+            # Espalhamento orgânico O(1) usando hash nativo
             h_cep = hash(cep)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
             lat_center = lat_cab + rng.normal(0, 0.003)
@@ -931,17 +930,13 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                 transp = r_base[idx_transp]
                 cor = st.session_state.cores_transp.get(transp, '#333333')
                 
-                html_tooltip = f'''
-                    <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 150px;">
-                        <b>CEP:</b> {cep}<br>
-                        <b>Bairro:</b> {r_base[idx_bairro]}<br>
-                        <b>Transportadora:</b> {transp}<br>
-                        <b>Volume Base:</b> {r_base[idx_vol]}<br>
-                '''
+                # HTML Tooltip formatado em uma única linha para evitar quebras no JSON/JS
+                html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
+                
                 if qtd_bases > 1:
-                    html_tooltip += f'<span style="color: #e74c3c;"><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>'
+                    html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
                 else:
-                    html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
+                    html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
 
                 if qtd_real == 1:
                     markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
@@ -952,7 +947,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                     lon_pino = lon_center + offset_r * np.sin(angle)
                     markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    # INJEÇÃO JS RÁPIDA NA MEMÓRIA
+    # INJEÇÃO JS NATIVA PARA DESENHO RÁPIDO DO CANVAS
     map_id = m.get_name()
     js_code = f"""
     var markers = {json.dumps(markers_data)};
@@ -996,8 +991,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                     tooltip=f"🏢 Sede: {base}",
                     icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
                 ).add_to(m)
-
-    # RENDERIZAÇÃO ESTÁTICA OTIMIZADA PARA NUVEM
+            
     if expandido:
         folium_static(m, width=1200, height=800)
     else:

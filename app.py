@@ -796,14 +796,11 @@ def extrair_centroides_bairros(gdf_cidade):
 
 dict_bairros_centroides = extrair_centroides_bairros(gdf_cidade)
 
-def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
-    base_y, base_x = dict_centroides.get(bairro_id, (cy, cx))
-    return base_y, base_x
-
 def prepara_mapa_pontos(df_cenario):
-    # Agrupa mantendo a Transportadora para exibir pontos separados para bases na mesma cabeça de cep
-    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
-        Volume=('Volume', 'sum')
+    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
+        Volume=('Volume', 'sum'),
+        Qtd_Bases=('Transportadora', 'nunique'),
+        Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
     ).reset_index()
     return df_pontos
 
@@ -856,50 +853,70 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
     ).add_to(m)
 
     for _, row in df_pontos.iterrows():
-        transp = row['Transportadora']
-        if not get_visibilidade(transp): continue
+        parceiros = row['Parceiros'].split(' + ')
+        parceiros_visiveis = [p for p in parceiros if get_visibilidade(p)]
+        
+        if not parceiros_visiveis: continue
         
         bairros_selec_safe = globals().get('bairros_selecionados', [])
         if bairros_selec_safe and row['Bairro'] not in bairros_selec_safe: continue
         
         bairro_id = row['Join_Bairro']
         if bairro_id in dict_bairros_centroides:
-            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row['Cabeca_CEP'], cy, cx, dict_bairros_centroides)
+            base_y, base_x = dict_bairros_centroides[bairro_id]
             
-            # Offsets deterministicos para garantir proximidade dos mesmos CEPs e separação das transportadoras
+            # Stable random center for this CEP
             h_cep = int(hashlib.md5(str(row[COLUNA_CEP]).encode()).hexdigest(), 16)
-            h_transp = int(hashlib.md5(str(transp).encode()).hexdigest(), 16)
+            rng = np.random.RandomState(h_cep % (2**32 - 1))
+            lat_center = base_y + rng.normal(0, 0.003)
+            lon_center = base_x + rng.normal(0, 0.003)
             
-            # Espalhamento base do CEP (cluster principal)
-            lat_cep = lat_cab + (((h_cep % 100) / 100.0) - 0.5) * 0.002
-            lon_cep = lon_cab + ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.002
-            
-            # Micro-espalhamento por transportadora (exibir bolinhas de bases sobrepostas ligeiramente ao lado)
-            lat_pino = lat_cep + (((h_transp % 100) / 100.0) - 0.5) * 0.0008
-            lon_pino = lon_cep + ((((h_transp // 100) % 100) / 100.0) - 0.5) * 0.0008
-            
-            cor = st.session_state.cores_transp.get(transp, '#333333')
+            qtd_bases = len(parceiros_visiveis)
+            siglas_parceiros = extrair_siglas(' + '.join(parceiros_visiveis))
             
             html_tooltip = f'''
                 <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 150px;">
                     <b>CEP:</b> {row[COLUNA_CEP]}<br>
-                    <b>Cabeça de CEP:</b> {row['Cabeca_CEP']}<br>
                     <b>Bairro:</b> {row['Bairro']}<br>
-                    <b>Transportadora:</b> {transp}<br>
                     <b>Volume:</b> {row['Volume']}<br>
-                </div>
             '''
+            if qtd_bases > 1:
+                html_tooltip += f'<span style="color: #e74c3c;"><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>'
+            else:
+                html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
 
-            folium.CircleMarker(
-                location=[lat_pino, lon_pino],
-                radius=4,
-                color='white',
-                weight=0.5,
-                fill=True,
-                fillColor=cor,
-                fillOpacity=0.9,
-                tooltip=folium.Tooltip(html_tooltip)
-            ).add_to(m)
+            if qtd_bases == 1:
+                transp = parceiros_visiveis[0]
+                cor = st.session_state.cores_transp.get(transp, '#333333')
+                folium.CircleMarker(
+                    location=[lat_center, lon_center],
+                    radius=4,
+                    color='white',
+                    weight=0.5,
+                    fill=True,
+                    fillColor=cor,
+                    fillOpacity=0.9,
+                    tooltip=folium.Tooltip(html_tooltip)
+                ).add_to(m)
+            else:
+                # Plot grouped tiny dots for overlapping bases
+                offset_r = 0.0004
+                for i, transp in enumerate(parceiros_visiveis):
+                    angle = (i / qtd_bases) * 2 * np.pi
+                    lat_pino = lat_center + offset_r * np.cos(angle)
+                    lon_pino = lon_center + offset_r * np.sin(angle)
+                    cor = st.session_state.cores_transp.get(transp, '#333333')
+                    
+                    folium.CircleMarker(
+                        location=[lat_pino, lon_pino],
+                        radius=3,
+                        color='white',
+                        weight=0.5,
+                        fill=True,
+                        fillColor=cor,
+                        fillOpacity=0.9,
+                        tooltip=folium.Tooltip(html_tooltip)
+                    ).add_to(m)
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1085,7 +1102,6 @@ with aba1:
         desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, map_key="mapa_cenario_simulado", expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
-        if TAG_MISSORTING in bases_ativas_sim: t_sim_legenda.append(TAG_MISSORTING)
         t_sim_legenda.append('Sem Dados / Divergência')
         gerar_legenda(t_sim_legenda)
         

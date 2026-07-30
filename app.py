@@ -874,8 +874,8 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
-    # OTIMIZAÇÃO: HTML nativo ultraleve, retira a carga de 15.000 pontos do processador
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
+    # OTIMIZAÇÃO EXTREMA COM RENDERIZAÇÃO JS NATIVA (CANVAS VIA COMPONENTS)
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -900,8 +900,10 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
+        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
+        
         cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
@@ -916,7 +918,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
-            # Espalhamento orgânico O(1) usando hash python nativo 
+            # Espalhamento orgânico O(1) usando hash nativo
             h_cep = hash(cep)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
             lat_center = lat_cab + rng.normal(0, 0.003)
@@ -952,7 +954,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                     lon_pino = lon_center + offset_r * np.sin(angle)
                     markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    # INJEÇÃO JS NATIVA: Passamos a lista inteira para o Leaflet renderizar de uma vez no navegador
+    # INJEÇÃO JS NATIVA PARA DESENHO RÁPIDO DO CANVAS
     map_id = m.get_name()
     js_code = f"""
     var markers = {json.dumps(markers_data)};
@@ -999,9 +1001,9 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
             
     html_data = m.get_root().render()
     if expandido:
-        components.html(html_data, height=800)
+        st.components.v1.html(html_data, height=800)
     else:
-        components.html(html_data, height=400)
+        st.components.v1.html(html_data, height=400)
 
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
@@ -1060,7 +1062,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, map_key="mapa_cenario_atual", expandido=expandir_mapa)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1165,7 +1167,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, map_key="mapa_cenario_simulado", expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1324,7 +1326,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, map_key="mapa_cenario_ia", expandido=expandir_mapa)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')

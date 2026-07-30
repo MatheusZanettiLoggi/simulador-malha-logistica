@@ -842,16 +842,6 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# Extrai O(1) do centroide real (Apenas para IA calcular a distância linear)
-def extrair_centroides_ia(gdf_cidade):
-    dict_centroids = {}
-    for _, row in gdf_cidade.iterrows():
-        if pd.notnull(row['geometry']):
-            dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
-    return dict_centroids
-
-dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
-
 # Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
 @st.cache_data(show_spinner=False)
 def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
@@ -884,8 +874,17 @@ def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
             dict_pontos[b_id] = pts
     return dict_pontos
 
-# Carregamos do cache (instantâneo após a primeira vez)
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(cidade_selecionada, gdf_cidade)
+
+# Apenas para o Algoritmo da IA conseguir traçar a linha reta
+def extrair_centroides_ia(gdf_cidade):
+    dict_centroids = {}
+    for _, row in gdf_cidade.iterrows():
+        if pd.notnull(row['geometry']):
+            dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+    return dict_centroids
+
+dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
@@ -1215,13 +1214,17 @@ with aba1:
             vol_sim_total = df_valid_sim['Volume'].sum()
             vol_mod = df_cidade_orig[df_cidade_orig['Transportadora'] != df_cidade_sim['Transportadora']]['Volume'].sum()
             
-            st.metric("Volume Alterado", f"{vol_mod:,.0f}".replace(',','.'))
+            dias = st.session_state.qtd_dias_analise
+            vol_mod_dia = vol_mod / dias if dias > 0 else 0
+            
+            st.metric("Volume Alterado (Pacotes/Dia)", f"{vol_mod_dia:,.0f}".replace(',','.'))
             
             st.markdown(f"**Abrangência:**")
             vol_por_base_sim = df_valid_sim.groupby('Transportadora')['Volume'].sum().sort_values(ascending=False)
             for base, vol in vol_por_base_sim.items():
+                v_dia = vol / dias if dias > 0 else 0
                 perc = (vol / vol_sim_total * 100) if vol_sim_total > 0 else 0
-                st.write(f"- {base}: **{vol:,.0f} pacotes** ({perc:.1f}%)")
+                st.write(f"- {base}: **{v_dia:,.0f} pct/dia** ({perc:.1f}%)")
 
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📊 Ver Tabelas de Volumetria (Cenário Simulado)", expanded=False):
@@ -1372,13 +1375,18 @@ with aba2:
                 with col_ia_t:
                     df_valid_ia = df_cidade_ia_temp[df_cidade_ia_temp['Transportadora'] != TAG_MISSORTING]
                     vol_ia_total = df_valid_ia['Volume'].sum()
-                    st.metric("Pacotes Alocados", f"{vol_ia_total:,.0f}".replace(',','.'))
+                    
+                    dias = st.session_state.qtd_dias_analise
+                    vol_ia_dia = vol_ia_total / dias if dias > 0 else 0
+                    
+                    st.metric("Pacotes Alocados (Média Pct/Dia)", f"{vol_ia_dia:,.0f}".replace(',','.'))
                     
                     st.markdown(f"**Abrangência:**")
                     vol_por_base_ia = df_valid_ia.groupby('Transportadora')['Volume'].sum().sort_values(ascending=False)
                     for base, vol in vol_por_base_ia.items():
+                        v_dia = vol / dias if dias > 0 else 0
                         perc = (vol / vol_ia_total * 100) if vol_ia_total > 0 else 0
-                        st.write(f"- {base}: **{vol:,.0f} pacotes** ({perc:.1f}%)")
+                        st.write(f"- {base}: **{v_dia:,.0f} pct/dia** ({perc:.1f}%)")
 
             st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("📊 Ver Tabelas de Volumetria (Cenário IA)", expanded=False):
@@ -1529,12 +1537,36 @@ with aba3:
                 st.markdown("### 🗂️ Exportar Resultados Consolidados")
                 st.write("Baixe todas as tabelas (Volume e Ranges) juntas em um único arquivo Excel multipáginas formatado.")
 
+                # Extrai os CEPs que mudaram de base entre o Atual e o Simulado
+                df_merged = pd.merge(
+                    df_cidade_orig[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']],
+                    df_cidade_sim[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']],
+                    on=['Bairro', 'Cabeca_CEP', COLUNA_CEP],
+                    suffixes=('_Atual', '_Simulado')
+                )
+                df_changed = df_merged[df_merged['Transportadora_Atual'] != df_merged['Transportadora_Simulado']].copy()
+
+                if not df_changed.empty:
+                    df_changed.rename(columns={
+                        'Transportadora_Atual': 'Transportadora (Cenário Atual)',
+                        'Transportadora_Simulado': 'Transportadora (Cenário Simulado)',
+                        'Volume': 'Volume Total'
+                    }, inplace=True)
+                    
+                    dias = st.session_state.get('qtd_dias_analise', 30)
+                    df_changed['Volume / Dia'] = (df_changed['Volume Total'] / dias).round(0)
+                    df_changed = df_changed.sort_values(by=['Transportadora (Cenário Atual)', 'Bairro', COLUNA_CEP])
+                else:
+                    df_changed = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
+
                 dict_completo = {
                     'Volume_Atual': gerar_tabela(df_cidade_orig),
                     'Volume_Simulado': gerar_tabela(df_cidade_sim),
                     'CEPs_Atual': df_range_orig,
-                    'CEPs_Simulado': df_range_sim
+                    'CEPs_Simulado': df_range_sim,
+                    'CEPs_Alterados': df_changed
                 }
+                
                 if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
                     dict_completo['Volume_IA'] = gerar_tabela(df_cidade_ia_temp)
                     dict_completo['CEPs_IA'] = df_range_ia

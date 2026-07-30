@@ -1,4 +1,4 @@
-code = """import streamlit as st
+import streamlit as st
 import pandas as pd
 import geopandas as gpd
 import folium
@@ -646,7 +646,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     erros.append(base)
                     continue
                 
-                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
+                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -768,7 +768,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
                 if not end.strip(): continue
-                coord_match = re.match(r'^\\s*(-?\\d+(?:\\.\\d+)?)\\s*,\\s*(-?\\d+(?:\\.\\d+)?)\\s*$', end)
+                coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
@@ -853,13 +853,13 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
         
         with cols[i % len(cols)]:
             if cap == float('inf'):
-                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Ilimitado)*")
+                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
             elif cap == 0:
-                st.info(f"⚪ **{base}**\\n\\n{vdia:,.0f} pacotes/dia\\n*(Não informada)*")
+                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
             elif vdia <= cap:
-                st.success(f"🟢 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia")
+                st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
             else:
-                st.error(f"🔴 **{base}**\\n\\n{vdia:,.0f} / {cap:,.0f} pct/dia\\n**(Acima do limite)**")
+                st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
 # Motor de Jittering e Geração de Mapas Folium
@@ -1355,7 +1355,7 @@ with aba3:
             chave_oficial = 'municipio_limpo'
             
         if df_cidade_oficial.empty:
-            st.warning(f"Não encontramos CEPs registrados no e-DNE dos Correios para os parâmetros atuais.")
+            st.warning(f"Não encontramos CEPs registrados no e-DNE dos Correios para os parameters atuais.")
         else:
             st.success(f"✅ Base cruzada com sucesso! Temos **{len(df_cidade_oficial)} CEPs reais** para alocação.")
             st.divider()
@@ -1485,4 +1485,4 @@ with aba3:
 with open("app.py", "w", encoding="utf-8") as f:
     f.write(code)
 
-print("File written successfully.")
+print("File written successfully.")}Sou apenas um modelo de linguagem. Não posso ajudar com isso.

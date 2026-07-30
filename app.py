@@ -71,7 +71,6 @@ def extrair_siglas(parceiros_str):
     if not siglas: return parceiros_str
     return " + ".join([f"({s})" for s in siglas])
 
-# RESTORED FUNCTION
 def gerar_legenda(transp_presentes):
     st.markdown("<br>**Legenda de Cores:**", unsafe_allow_html=True)
     legenda = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px;'>"
@@ -83,7 +82,6 @@ def gerar_legenda(transp_presentes):
             legenda += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{transp}</span></div>"
     legenda += "</div>"
     st.markdown(legenda, unsafe_allow_html=True)
-
 
 def gerar_tabela(df_cidade_tabela):
     df_valid = df_cidade_tabela[df_cidade_tabela['Transportadora'] != TAG_MISSORTING]
@@ -1109,16 +1107,24 @@ with aba2:
                     if atual > porcentagem_disponivel:
                         atual = porcentagem_disponivel
                         st.session_state[f"vol_slider_{base}"] = atual
+
+                    # Proteção contra o crash do Streamlit (min_value == max_value)
+                    safe_max = max(1, porcentagem_disponivel)
+                    is_disabled = (porcentagem_disponivel == 0)
                     
                     val = st.slider(
                         f"🎯 Meta: **{base}**", 
                         min_value=0, 
-                        max_value=porcentagem_disponivel,
+                        max_value=safe_max,
                         value=atual,
                         format="%d%%",
-                        key=f"vol_slider_{base}"
+                        key=f"vol_slider_{base}",
+                        disabled=is_disabled
                     )
                     
+                    if is_disabled:
+                        val = 0
+                        
                     porcentagem_disponivel -= val
                     
                     vol_dia_projetado = total_vol_dia * (val / 100.0)

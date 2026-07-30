@@ -1355,7 +1355,7 @@ with aba3:
             chave_oficial = 'municipio_limpo'
             
         if df_cidade_oficial.empty:
-            st.warning(f"Não encontramos CEPs registrados no e-DNE dos Correios para os parameters atuais.")
+            st.warning(f"Não encontramos CEPs registrados no e-DNE dos Correios para os parâmetros atuais.")
         else:
             st.success(f"✅ Base cruzada com sucesso! Temos **{len(df_cidade_oficial)} CEPs reais** para alocação.")
             st.divider()
@@ -1480,9 +1480,3 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
-"""
-
-with open("app.py", "w", encoding="utf-8") as f:
-    f.write(code)
-
-print("File written successfully.")}Sou apenas um modelo de linguagem. Não posso ajudar com isso.

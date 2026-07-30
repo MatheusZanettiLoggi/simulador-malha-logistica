@@ -1040,6 +1040,27 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     else:
         folium_static(m, width=700, height=400)
 
+# Processamento antecipado de CEPs alterados para exibição imediata no Cenário Simulado
+df_merged_sim = pd.merge(
+    df_cidade_orig[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']],
+    df_cidade_sim[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']],
+    on=['Bairro', 'Cabeca_CEP', COLUNA_CEP],
+    suffixes=('_Atual', '_Simulado')
+)
+df_changed_sim = df_merged_sim[df_merged_sim['Transportadora_Atual'] != df_merged_sim['Transportadora_Simulado']].copy()
+
+if not df_changed_sim.empty:
+    df_changed_sim.rename(columns={
+        'Transportadora_Atual': 'Transportadora (Cenário Atual)',
+        'Transportadora_Simulado': 'Transportadora (Cenário Simulado)',
+        'Volume': 'Volume Total'
+    }, inplace=True)
+    dias_analise_tmp = st.session_state.get('qtd_dias_analise', 30)
+    df_changed_sim['Volume / Dia'] = (df_changed_sim['Volume Total'] / dias_analise_tmp).round(0)
+    df_changed_sim = df_changed_sim.sort_values(by=['Transportadora (Cenário Atual)', 'Bairro', COLUNA_CEP])
+else:
+    df_changed_sim = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
+
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
@@ -1235,6 +1256,13 @@ with aba1:
         with c_tab4:
             st.markdown(f"**Detalhamento por {lbl_local}**")
             st.dataframe(gerar_tabela_detalhada(df_cidade_sim, lbl_local), use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("**🔄 Relação de CEPs Alterados (De ➔ Para)**")
+        if df_changed_sim.empty:
+            st.info("Nenhum CEP foi alterado em relação ao Cenário Atual.")
+        else:
+            st.dataframe(df_changed_sim[['Bairro', COLUNA_CEP, 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)', 'Volume Total', 'Volume / Dia']], use_container_width=True, hide_index=True)
 
 with aba2:
     st.markdown("### 🧠 Distribuição Geográfica Inteligente")
@@ -1537,36 +1565,13 @@ with aba3:
                 st.markdown("### 🗂️ Exportar Resultados Consolidados")
                 st.write("Baixe todas as tabelas (Volume e Ranges) juntas em um único arquivo Excel multipáginas formatado.")
 
-                # Extrai os CEPs que mudaram de base entre o Atual e o Simulado
-                df_merged = pd.merge(
-                    df_cidade_orig[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']],
-                    df_cidade_sim[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']],
-                    on=['Bairro', 'Cabeca_CEP', COLUNA_CEP],
-                    suffixes=('_Atual', '_Simulado')
-                )
-                df_changed = df_merged[df_merged['Transportadora_Atual'] != df_merged['Transportadora_Simulado']].copy()
-
-                if not df_changed.empty:
-                    df_changed.rename(columns={
-                        'Transportadora_Atual': 'Transportadora (Cenário Atual)',
-                        'Transportadora_Simulado': 'Transportadora (Cenário Simulado)',
-                        'Volume': 'Volume Total'
-                    }, inplace=True)
-                    
-                    dias = st.session_state.get('qtd_dias_analise', 30)
-                    df_changed['Volume / Dia'] = (df_changed['Volume Total'] / dias).round(0)
-                    df_changed = df_changed.sort_values(by=['Transportadora (Cenário Atual)', 'Bairro', COLUNA_CEP])
-                else:
-                    df_changed = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
-
                 dict_completo = {
                     'Volume_Atual': gerar_tabela(df_cidade_orig),
                     'Volume_Simulado': gerar_tabela(df_cidade_sim),
                     'CEPs_Atual': df_range_orig,
                     'CEPs_Simulado': df_range_sim,
-                    'CEPs_Alterados': df_changed
+                    'CEPs_Alterados': df_changed_sim
                 }
-                
                 if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
                     dict_completo['Volume_IA'] = gerar_tabela(df_cidade_ia_temp)
                     dict_completo['CEPs_IA'] = df_range_ia

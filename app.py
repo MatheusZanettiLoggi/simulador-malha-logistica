@@ -4,7 +4,6 @@ import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
-import streamlit.components.v1 as components
 import unicodedata
 import difflib
 import json
@@ -876,7 +875,6 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
-    # OTIMIZACAO EXTREMA DE VELOCIDADE COM HTML NATIVO DO FOLIUM
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -908,9 +906,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
             pontos_por_cep[cep] = []
         pontos_por_cep[cep].append(row)
         
-    siglas_cache = {}
-    markers_data = []
-    
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
         bairro_id = row_ref[idx_bairro_id]
@@ -918,18 +913,16 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
-            # Fast pseudo-random generator
-            h_cep = hash(cep)
-            lat_center = lat_cab + (((h_cep % 1000) / 1000.0) - 0.5) * 0.006
-            lon_center = lon_cab + ((((h_cep // 1000) % 1000) / 1000.0) - 0.5) * 0.006
+            # Restauração da curva normal orgânica (Jitter original)
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            rng = np.random.RandomState(h_cep % (2**32 - 1))
+            lat_center = lat_cab + rng.normal(0, 0.003)
+            lon_center = lon_cab + rng.normal(0, 0.003)
             
             qtd_real = len(rows)
             qtd_bases = row_ref[idx_qtd_bases]
             parceiros_str = row_ref[idx_parceiros]
-            
-            if parceiros_str not in siglas_cache:
-                siglas_cache[parceiros_str] = extrair_siglas(parceiros_str)
-            siglas_parceiros = siglas_cache[parceiros_str]
+            siglas_parceiros = extrair_siglas(parceiros_str)
             
             for idx, r_base in enumerate(rows):
                 transp = r_base[idx_transp]
@@ -948,32 +941,32 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                     html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
 
                 if qtd_real == 1:
-                    markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
+                    folium.CircleMarker(
+                        location=[lat_center, lon_center],
+                        radius=4,
+                        color='white',
+                        weight=0.5,
+                        fill=True,
+                        fillColor=cor,
+                        fillOpacity=0.9,
+                        tooltip=folium.Tooltip(html_tooltip)
+                    ).add_to(m)
                 else:
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
                     lon_pino = lon_center + offset_r * np.sin(angle)
-                    markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
-
-    # INJEÇÃO JS NATIVA (V8 ENGINE DO BROWSER)
-    map_id = m.get_name()
-    js_script = f"""
-    var markers_data = {json.dumps(markers_data)};
-    for (var i=0; i<markers_data.length; i++) {{
-        var m_data = markers_data[i];
-        var marker = L.circleMarker([m_data[0], m_data[1]], {{
-            radius: m_data[3],
-            color: 'white',
-            weight: 0.5,
-            fill: true,
-            fillColor: m_data[2],
-            fillOpacity: 0.9
-        }}).addTo({map_id});
-        marker.bindTooltip(m_data[4]);
-    }}
-    """
-    m.get_root().script.add_child(folium.Element(js_script))
+                    
+                    folium.CircleMarker(
+                        location=[lat_pino, lon_pino],
+                        radius=3,
+                        color='white',
+                        weight=0.5,
+                        fill=True,
+                        fillColor=cor,
+                        fillOpacity=0.9,
+                        tooltip=folium.Tooltip(html_tooltip)
+                    ).add_to(m)
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1001,11 +994,11 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                     icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
                 ).add_to(m)
             
-    html_data = m.get_root().render()
+    # Correção do fundo branco usando st_folium padrão otimizado com canvas
     if expandido:
-        components.html(html_data, height=800)
+        st_folium(m, width=1200, height=800, use_container_width=True, returned_objects=[], key=map_key)
     else:
-        components.html(html_data, height=400)
+        st_folium(m, width=700, height=400, use_container_width=False, returned_objects=[], key=map_key)
 
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
@@ -1451,7 +1444,7 @@ with aba3:
             with timer("9. Geração de Planilhas Excel"):
                 st.download_button(
                     label="📥 Baixar CEPs Cenário Atual (Excel)",
-                    data=exportar_excel_formatado(dict({'Cenario_Atual': df_range_orig})),
+                    data=exportar_excel_formatado({"Cenario_Atual": df_range_orig}),
                     file_name=f"CEPs_Cenario_Atual.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
@@ -1468,7 +1461,7 @@ with aba3:
                 
                 st.download_button(
                     label="📥 Baixar CEPs Cenário Simulado (Excel)",
-                    data=exportar_excel_formatado(dict({'Cenario_Simulado': df_range_sim})),
+                    data=exportar_excel_formatado({"Cenario_Simulado": df_range_sim}),
                     file_name=f"CEPs_Cenario_Simulado.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
@@ -1486,7 +1479,7 @@ with aba3:
                     
                     st.download_button(
                         label="📥 Baixar CEPs Cenário IA (Excel)",
-                        data=exportar_excel_formatado(dict({'Cenario_IA': df_range_ia})),
+                        data=exportar_excel_formatado({"Cenario_IA": df_range_ia}),
                         file_name=f"CEPs_Cenario_IA.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )

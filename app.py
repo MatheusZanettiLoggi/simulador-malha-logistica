@@ -19,7 +19,7 @@ from openpyxl.styles import Font, Border, Side, Alignment
 
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
-st.markdown("""
+st.markdown('''
     <style>
     @media print {
         section[data-testid="stSidebar"] { display: none !important; }
@@ -34,7 +34,7 @@ st.markdown("""
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     }
     </style>
-""", unsafe_allow_html=True)
+''', unsafe_allow_html=True)
 
 COLUNA_CEP = 'Package ZIP'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
@@ -1100,53 +1100,60 @@ with aba2:
             total_volume_cidade = df_ia_base['Volume'].sum()
             total_vol_dia = total_volume_cidade / st.session_state.qtd_dias_analise
             
-            total_alocado_manual = 0.0
+            porcentagem_disponivel = 100  # Inicia com 100% livre
             cols_ia = st.columns(min(len(bases_ativas_ia), 4))
             
             for i, base in enumerate(bases_ativas_ia[:-1]):
                 with cols_ia[i % 4]:
-                    # Slider independente
+                    atual = st.session_state.get(f"vol_slider_{base}", 100 // len(bases_ativas_ia))
+                    if atual > porcentagem_disponivel:
+                        atual = porcentagem_disponivel
+                        st.session_state[f"vol_slider_{base}"] = atual
+                    
                     val = st.slider(
                         f"🎯 Meta: **{base}**", 
                         min_value=0, 
-                        max_value=100, 
-                        value=int(st.session_state.get(f"vol_slider_{base}", 100 // len(bases_ativas_ia))),
+                        max_value=porcentagem_disponivel,
+                        value=atual,
                         format="%d%%",
                         key=f"vol_slider_{base}"
                     )
-                    total_alocado_manual += val
+                    
+                    porcentagem_disponivel -= val
                     
                     vol_dia_projetado = total_vol_dia * (val / 100.0)
                     cap_base = st.session_state.capacidades_bases.get(base, 0)
                     
-                    if cap_base > 0 and cap_base != float('inf') and vol_dia_projetado > cap_base:
-                         st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pacotes > Cap: {cap_base} pacotes")
+                    if cap_base > 0 and cap_base != float('inf'):
+                        if vol_dia_projetado > cap_base:
+                             st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
+                        else:
+                             st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
                     else:
-                         st.caption(f"Proj: {vol_dia_projetado:,.0f} pacotes/dia")
+                         st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
 
-            # A última base recebe o resto
             base_final = bases_ativas_ia[-1]
-            if total_alocado_manual > 100:
-                st.error("⚠️ A soma das porcentagens ultrapassou 100%. Por favor, reduza os valores acima.")
-                val_final = 0
-            else:
-                val_final = 100.0 - total_alocado_manual
+            val_final = porcentagem_disponivel
                 
             st.session_state[f"vol_slider_{base_final}"] = val_final
             
             with cols_ia[(len(bases_ativas_ia)-1) % 4]:
                 st.markdown(f"🎯 Meta: **{base_final}** (Automático)")
-                st.info(f"**{val_final:.1f}%**")
+                st.info(f"**{val_final:.0f}%**")
                 
                 vol_dia_projetado = total_vol_dia * (val_final / 100.0)
                 cap_base = st.session_state.capacidades_bases.get(base_final, 0)
-                if cap_base > 0 and cap_base != float('inf') and vol_dia_projetado > cap_base:
-                     st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pacotes > Cap: {cap_base} pacotes")
+                
+                if cap_base > 0 and cap_base != float('inf'):
+                    if vol_dia_projetado > cap_base:
+                         st.error(f"⚠️ Estouro: {vol_dia_projetado:,.0f} pct > Cap: {cap_base}")
+                    else:
+                         st.success(f"✅ Dentro do limite: {vol_dia_projetado:,.0f} / {cap_base} pct")
                 else:
-                     st.caption(f"Proj: {vol_dia_projetado:,.0f} pacotes/dia")
+                     st.info(f"ℹ️ Projeção: {vol_dia_projetado:,.0f} pct/dia (Ilimitado)")
             
             st.markdown("<br>", unsafe_allow_html=True)
-            submit_ia = st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary", disabled=(total_alocado_manual > 100))
+            submit_ia = st.button("🚀 Processar IA (Alocação Radial Mínima)", type="primary")
 
         if submit_ia:
             with st.spinner("Calculando matriz global de distâncias para todos os Cabeças de CEP..."):

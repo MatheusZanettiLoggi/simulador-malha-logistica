@@ -21,6 +21,7 @@ from geopy.distance import geodesic
 from openpyxl.styles import Font, Border, Side, Alignment
 from branca.element import MacroElement
 from jinja2 import Template
+from shapely.geometry import Point
 
 st.set_page_config(layout="wide", page_title="Simulador de Malha Logística", page_icon="🗺️")
 
@@ -841,22 +842,50 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-def extrair_centroides_bairros(gdf_cidade):
+# Extrai O(1) do centroide real (Apenas para IA calcular a distância linear)
+def extrair_centroides_ia(gdf_cidade):
     dict_centroids = {}
     for _, row in gdf_cidade.iterrows():
         if pd.notnull(row['geometry']):
-            bounds = row['geometry'].bounds
-            dict_centroids[row['Join_Bairro']] = (
-                row['geometry'].centroid.y,
-                row['geometry'].centroid.x,
-                bounds[1], # miny
-                bounds[3], # maxy
-                bounds[0], # minx
-                bounds[2]  # maxx
-            )
+            dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
     return dict_centroids
 
-dict_bairros_centroides = extrair_centroides_bairros(gdf_cidade)
+dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
+
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
+@st.cache_data(show_spinner=False)
+def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
+    dict_pontos = {}
+    for _, row in _gdf_cidade.iterrows():
+        geom = row['geometry']
+        if pd.notnull(geom):
+            b_id = row['Join_Bairro']
+            pts = []
+            minx, miny, maxx, maxy = geom.bounds
+            
+            # Semente fixa para que os bairros não mudem de posição a cada F5
+            h_bairro = int(hashlib.md5(b_id.encode()).hexdigest(), 16)
+            rng = np.random.RandomState(h_bairro % (2**32 - 1))
+            
+            attempts = 0
+            while len(pts) < 60 and attempts < 2000:
+                rx = rng.uniform(minx, maxx)
+                ry = rng.uniform(miny, maxy)
+                pnt = Point(rx, ry)
+                # Verifica rigorosamente se o ponto não caiu no mar ou bairro vizinho
+                if geom.contains(pnt):
+                    pts.append((ry, rx))
+                attempts += 1
+            
+            if not pts:
+                rep = geom.representative_point()
+                pts.append((rep.y, rep.x))
+                
+            dict_pontos[b_id] = pts
+    return dict_pontos
+
+# Carregamos do cache (instantâneo após a primeira vez)
+dict_bairros_pontos_espalhados = extrair_pontos_bairros(cidade_selecionada, gdf_cidade)
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
@@ -922,7 +951,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     cols = list(df_pontos.columns)
     idx_bairro_id = cols.index('Join_Bairro')
     idx_bairro = cols.index('Bairro')
-    idx_cabeca = cols.index('Cabeca_CEP')
     idx_cep = cols.index(COLUNA_CEP)
     idx_transp = cols.index('Transportadora')
     idx_vol = cols.index('Volume')
@@ -933,8 +961,10 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
+        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
+        
         cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
@@ -946,20 +976,12 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         row_ref = rows[0]
         bairro_id = row_ref[idx_bairro_id]
         
-        if bairro_id in dict_bairros_centroides:
-            lat_cab, lon_cab, miny, maxy, minx, maxx = dict_bairros_centroides[bairro_id]
+        if bairro_id in dict_bairros_pontos_espalhados:
+            valid_points = dict_bairros_pontos_espalhados[bairro_id]
             
-            # Espalhamento ORGÂNICO por toda a extensão da caixa delimitadora do bairro
+            # Escolhe 1 ponto válido validado pelo "Contains" do Shapely
             h_cep = hash(cep)
-            rng = np.random.RandomState(h_cep % (2**32 - 1))
-            
-            lat_span = maxy - miny
-            lon_span = maxx - minx
-            if lat_span == 0: lat_span = 0.001
-            if lon_span == 0: lon_span = 0.001
-            
-            lat_center = rng.uniform(miny + lat_span*0.05, maxy - lat_span*0.05)
-            lon_center = rng.uniform(minx + lon_span*0.05, maxx - lon_span*0.05)
+            lat_center, lon_center = valid_points[h_cep % len(valid_points)]
             
             qtd_real = len(rows)
             qtd_bases = row_ref[idx_qtd_bases]
@@ -980,14 +1002,12 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                 if qtd_real == 1:
                     markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
                 else:
-                    # Deslocamento minúsculo para mostrar as duas cores juntas do mesmo CEP (Jittering de sobreposição)
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
                     lon_pino = lon_center + offset_r * np.sin(angle)
                     markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    # Utiliza MacroElement para injetar o JS em background nativo sem travar o processador Python
     FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:

@@ -4,7 +4,6 @@ import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen
 from streamlit_folium import st_folium
-import streamlit.components.v1 as components
 import unicodedata
 import difflib
 import json
@@ -876,6 +875,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
+    # OTIMIZAÇÃO: HTML nativo ultraleve, retira a carga de 15.000 pontos do processador
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -900,15 +900,15 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
-        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
-        
         cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
         pontos_por_cep[cep].append(row)
         
+    markers_data = []
+    
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
         bairro_id = row_ref[idx_bairro_id]
@@ -916,7 +916,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
-            # Espalhamento orgânico O(1) usando hash python nativo em vez de biblioteca pesada
+            # Espalhamento orgânico O(1) usando hash python nativo 
             h_cep = hash(cep)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
             lat_center = lat_cab + rng.normal(0, 0.003)
@@ -944,32 +944,32 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
                     html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
 
                 if qtd_real == 1:
-                    folium.CircleMarker(
-                        location=[lat_center, lon_center],
-                        radius=4,
-                        color='white',
-                        weight=0.5,
-                        fill=True,
-                        fillColor=cor,
-                        fillOpacity=0.9,
-                        tooltip=folium.Tooltip(html_tooltip)
-                    ).add_to(m)
+                    markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
                 else:
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
                     lon_pino = lon_center + offset_r * np.sin(angle)
-                    
-                    folium.CircleMarker(
-                        location=[lat_pino, lon_pino],
-                        radius=3,
-                        color='white',
-                        weight=0.5,
-                        fill=True,
-                        fillColor=cor,
-                        fillOpacity=0.9,
-                        tooltip=folium.Tooltip(html_tooltip)
-                    ).add_to(m)
+                    markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+
+    # INJEÇÃO JS NATIVA: Passamos a lista inteira para o Leaflet renderizar de uma vez no navegador
+    map_id = m.get_name()
+    js_code = f"""
+    var markers = {json.dumps(markers_data)};
+    for (var i=0; i<markers.length; i++) {{
+        var data = markers[i];
+        var circle = L.circleMarker([data[0], data[1]], {{
+            radius: data[3],
+            color: 'white',
+            weight: 0.5,
+            fill: true,
+            fillColor: data[2],
+            fillOpacity: 0.9
+        }}).addTo({map_id});
+        circle.bindTooltip(data[4]);
+    }}
+    """
+    m.get_root().script.add_child(folium.Element(js_code))
 
     if pinos_bases:
         for base, coords in pinos_bases.items():

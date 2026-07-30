@@ -3,7 +3,8 @@ import pandas as pd
 import geopandas as gpd
 import folium
 from folium.plugins import Fullscreen
-from streamlit_folium import folium_static, st_folium
+from streamlit_folium import st_folium
+import streamlit.components.v1 as components
 import unicodedata
 import difflib
 import json
@@ -14,7 +15,6 @@ import io
 import random
 import zipfile
 import numpy as np
-import hashlib
 from contextlib import contextmanager
 from geopy.geocoders import Nominatim
 from geopy.distance import geodesic
@@ -918,10 +918,9 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
         if bairro_id in dict_bairros_centroides:
             lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            rng = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = lat_cab + rng.normal(0, 0.003)
-            lon_center = lon_cab + rng.normal(0, 0.003)
+            h_cep = hash(str(cep))
+            lat_center = lat_cab + (((h_cep % 100) / 100.0) - 0.5) * 0.006
+            lon_center = lon_cab + ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
             
             qtd_real = len(rows)
             qtd_bases = row_ref[idx_qtd_bases]
@@ -998,10 +997,12 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                     icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
                 ).add_to(m)
             
+    import streamlit.components.v1 as components
+    html_data = m.get_root().render()
     if expandido:
-        st_folium(m, width=1200, height=800, use_container_width=True, returned_objects=[], key=map_key)
+        components.html(html_data, height=800)
     else:
-        st_folium(m, width=700, height=400, use_container_width=False, returned_objects=[], key=map_key)
+        components.html(html_data, height=400)
 
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 

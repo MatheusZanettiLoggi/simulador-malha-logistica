@@ -259,7 +259,6 @@ def otimizar_base_global(df_raw, de_para_dict):
     df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
     df['Bairro'] = df['Bairro'].astype(str).str.title()
     
-    # Otimização do mode()
     modes = df.groupby('Join_Bairro')['Bairro'].agg(lambda x: x.mode()[0] if not x.empty else x.iloc[0]).to_dict()
     df['Bairro'] = df['Join_Bairro'].map(modes)
     
@@ -491,7 +490,6 @@ cidades_disponiveis = sorted(df_vol['Cidade'].unique())
 cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
-# Clear states when city changes
 if 'cidade_selecionada_prev' not in st.session_state:
     st.session_state.cidade_selecionada_prev = cidade_selecionada
 elif st.session_state.cidade_selecionada_prev != cidade_selecionada:
@@ -534,7 +532,6 @@ if divergentes:
 
 df_cidade_sim = df_cidade_orig.copy()
 
-# Applying manual simulation rules safely
 for regra in st.session_state.regras_simulacao:
     t = regra['tipo']
     o = regra['origem']
@@ -811,18 +808,15 @@ def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
-    # Agrupa mantendo a Transportadora para exibir pontos separados para bases na mesma cabeça de cep
     df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
         Volume=('Volume', 'sum')
     ).reset_index()
     
-    # Agrupa de volta apenas as transportadoras para criar as listas "Parceiros" e etc
     df_agrupado = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
         Qtd_Bases=('Transportadora', 'nunique'),
         Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
     ).reset_index()
     
-    # Merge
     return pd.merge(df_pontos, df_agrupado, on=['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
 
 def get_visibilidade(transp):
@@ -830,7 +824,6 @@ def get_visibilidade(transp):
     if transp == TAG_MISSORTING: return True 
     return transp in transp_selecionadas_sidebar
 
-# Monitor de Capacidade Visual
 def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown(f"**Verificação de Capacidade - {label}**")
     
@@ -863,7 +856,6 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-# Motor de Jittering e Geração de Mapas Folium
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map_key="default_map", expandido=False):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter")
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
@@ -873,55 +865,54 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
         style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
     ).add_to(m)
     
-    # Process unique CEPs to distribute overlapping dots cleanly
-    ceps_unicos = df_pontos[[COLUNA_CEP, 'Join_Bairro', 'Cabeca_CEP', 'Bairro', 'Qtd_Bases', 'Parceiros']].drop_duplicates()
+    bairros_selec_safe = globals().get('bairros_selecionados', [])
     
-    for _, row in ceps_unicos.iterrows():
-        cep_atual = row[COLUNA_CEP]
-        qtd_bases = row['Qtd_Bases']
-        parceiros_str = row['Parceiros']
+    pontos_por_cep = {}
+    for row in df_pontos.itertuples(index=False):
+        transp = row[4]
+        if not get_visibilidade(transp): continue
         
-        bairros_selec_safe = globals().get('bairros_selecionados', [])
-        if bairros_selec_safe and row['Bairro'] not in bairros_selec_safe: continue
+        bairro_nome = row[1]
+        if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
         
-        bairro_id = row['Join_Bairro']
+        cep = row[3]
+        if cep not in pontos_por_cep:
+            pontos_por_cep[cep] = []
+        pontos_por_cep[cep].append(row)
+        
+    for cep, rows in pontos_por_cep.items():
+        row_ref = rows[0]
+        bairro_id = row_ref[0]
+        
         if bairro_id in dict_bairros_centroides:
-            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row['Cabeca_CEP'], cy, cx, dict_bairros_centroides)
+            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[2], cy, cx, dict_bairros_centroides)
             
-            # Stable random center for this CEP based on CEP string hash
-            h_cep = int(hashlib.md5(str(cep_atual).encode()).hexdigest(), 16)
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
             lat_center = lat_cab + rng.normal(0, 0.003)
             lon_center = lon_cab + rng.normal(0, 0.003)
             
-            # Filter bases related to this CEP that are currently visible
-            parceiros_lista = parceiros_str.split(' + ')
-            bases_ceps = df_pontos[(df_pontos[COLUNA_CEP] == cep_atual) & (df_pontos['Transportadora'].isin(parceiros_lista))]
+            qtd_real = len(rows)
+            qtd_bases = row_ref[6]
+            parceiros_str = row_ref[7]
+            siglas_parceiros = extrair_siglas(parceiros_str)
             
-            # Draw each point
-            idx = 0
-            qtd_real = len(bases_ceps)
-            
-            for _, r_base in bases_ceps.iterrows():
-                transp = r_base['Transportadora']
-                if not get_visibilidade(transp): continue
+            for idx, r_base in enumerate(rows):
+                transp = r_base[4]
+                cor = st.session_state.cores_transp.get(transp, '#333333')
                 
-                # HTML tooltip for each dot
-                siglas_parceiros = extrair_siglas(parceiros_str)
                 html_tooltip = f'''
                     <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 150px;">
-                        <b>CEP:</b> {cep_atual}<br>
-                        <b>Bairro:</b> {row['Bairro']}<br>
+                        <b>CEP:</b> {cep}<br>
+                        <b>Bairro:</b> {r_base[1]}<br>
                         <b>Transportadora:</b> {transp}<br>
-                        <b>Volume Base:</b> {r_base['Volume']}<br>
+                        <b>Volume Base:</b> {r_base[5]}<br>
                 '''
                 if qtd_bases > 1:
                     html_tooltip += f'<span style="color: #e74c3c;"><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>'
                 else:
                     html_tooltip += f'<b>Parceiros:</b> {siglas_parceiros}</div>'
 
-                cor = st.session_state.cores_transp.get(transp, '#333333')
-                
                 if qtd_real == 1:
                     folium.CircleMarker(
                         location=[lat_center, lon_center],
@@ -934,7 +925,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                         tooltip=folium.Tooltip(html_tooltip)
                     ).add_to(m)
                 else:
-                    # Offset slightly if multiple overlapping
                     offset_r = 0.0004
                     angle = (idx / qtd_real) * 2 * np.pi
                     lat_pino = lat_center + offset_r * np.cos(angle)
@@ -950,7 +940,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
                         fillOpacity=0.9,
                         tooltip=folium.Tooltip(html_tooltip)
                     ).add_to(m)
-                    idx += 1
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1342,8 +1331,7 @@ with aba3:
     else:
         st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}** para a análise regional.")
     
-    with st.spinner(f"Baixando e cruzando a malha oficial dos Correios..."):
-        df_estado = carregar_ceps_estado(uf_automatica)
+    df_estado = carregar_ceps_estado(uf_automatica)
         
     if not df_estado.empty:
         df_estado['municipio_limpo'] = df_estado['municipio'].apply(limpa_texto)
@@ -1418,7 +1406,7 @@ with aba3:
             
             st.download_button(
                 label="📥 Baixar CEPs Cenário Atual (Excel)",
-                data=exportar_excel_formatado(dict({'Cenario_Atual': df_range_orig})),
+                data=exportar_excel_formatado({"Cenario_Atual": df_range_orig}),
                 file_name=f"CEPs_Cenario_Atual.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -1435,7 +1423,7 @@ with aba3:
             
             st.download_button(
                 label="📥 Baixar CEPs Cenário Simulado (Excel)",
-                data=exportar_excel_formatado(dict({'Cenario_Simulado': df_range_sim})),
+                data=exportar_excel_formatado({"Cenario_Simulado": df_range_sim}),
                 file_name=f"CEPs_Cenario_Simulado.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
@@ -1453,7 +1441,7 @@ with aba3:
                 
                 st.download_button(
                     label="📥 Baixar CEPs Cenário IA (Excel)",
-                    data=exportar_excel_formatado(dict({'Cenario_IA': df_range_ia})),
+                    data=exportar_excel_formatado({"Cenario_IA": df_range_ia}),
                     file_name=f"CEPs_Cenario_IA.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )

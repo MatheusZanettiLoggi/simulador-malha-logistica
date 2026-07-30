@@ -808,16 +808,8 @@ def obter_coordenadas_cabeca(bairro_id, cabeca_cep, cy, cx, dict_centroides):
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
-    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
-        Volume=('Volume', 'sum')
-    ).reset_index()
-    
-    df_agrupado = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
-        Qtd_Bases=('Transportadora', 'nunique'),
-        Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
-    ).reset_index()
-    
-    return pd.merge(df_pontos, df_agrupado, on=['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
+    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'], as_index=False)['Volume'].sum()
+    return df_pontos
 
 def get_visibilidade(transp):
     if transp == 'Sem Dados': return True
@@ -867,25 +859,33 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
     
     bairros_selec_safe = globals().get('bairros_selecionados', [])
     
+    cols = list(df_pontos.columns)
+    idx_bairro_id = cols.index('Join_Bairro')
+    idx_bairro = cols.index('Bairro')
+    idx_cabeca = cols.index('Cabeca_CEP')
+    idx_cep = cols.index(COLUNA_CEP)
+    idx_transp = cols.index('Transportadora')
+    idx_vol = cols.index('Volume')
+    
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
-        transp = row[4]
+        transp = row[idx_transp]
         if not get_visibilidade(transp): continue
         
-        bairro_nome = row[1]
+        bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
         
-        cep = row[3]
+        cep = row[idx_cep]
         if cep not in pontos_por_cep:
             pontos_por_cep[cep] = []
         pontos_por_cep[cep].append(row)
         
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
-        bairro_id = row_ref[0]
+        bairro_id = row_ref[idx_bairro_id]
         
         if bairro_id in dict_bairros_centroides:
-            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[2], cy, cx, dict_bairros_centroides)
+            lat_cab, lon_cab = obter_coordenadas_cabeca(bairro_id, row_ref[idx_cabeca], cy, cx, dict_bairros_centroides)
             
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_cep % (2**32 - 1))
@@ -893,20 +893,21 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, map
             lon_center = lon_cab + rng.normal(0, 0.003)
             
             qtd_real = len(rows)
-            qtd_bases = row_ref[6]
-            parceiros_str = row_ref[7]
+            parceiros_all = sorted(list(set([r[idx_transp] for r in rows])))
+            parceiros_str = ' + '.join(parceiros_all)
             siglas_parceiros = extrair_siglas(parceiros_str)
+            qtd_bases = len(parceiros_all)
             
             for idx, r_base in enumerate(rows):
-                transp = r_base[4]
+                transp = r_base[idx_transp]
                 cor = st.session_state.cores_transp.get(transp, '#333333')
                 
                 html_tooltip = f'''
                     <div style="font-family: 'Inter', sans-serif; font-size: 13px; min-width: 150px;">
                         <b>CEP:</b> {cep}<br>
-                        <b>Bairro:</b> {r_base[1]}<br>
+                        <b>Bairro:</b> {r_base[idx_bairro]}<br>
                         <b>Transportadora:</b> {transp}<br>
-                        <b>Volume Base:</b> {r_base[5]}<br>
+                        <b>Volume Base:</b> {r_base[idx_vol]}<br>
                 '''
                 if qtd_bases > 1:
                     html_tooltip += f'<span style="color: #e74c3c;"><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>'
@@ -1331,7 +1332,11 @@ with aba3:
     else:
         st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}** para a análise regional.")
     
-    df_estado = carregar_ceps_estado(uf_automatica)
+    @st.cache_data(show_spinner="Baixando e cruzando a malha oficial dos Correios...")
+    def obter_df_estado(uf):
+        return carregar_ceps_estado(uf)
+        
+    df_estado = obter_df_estado(uf_automatica)
         
     if not df_estado.empty:
         df_estado['municipio_limpo'] = df_estado['municipio'].apply(limpa_texto)

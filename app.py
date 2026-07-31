@@ -371,6 +371,33 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
+# Função de Cruzamento e Mapeamento Robusto dos Correios (Garante precisão granular)
+def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
+    df_res = df_oficial.copy()
+    df_ref_safe = df_referencia.copy()
+    
+    df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+    df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+    df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
+    
+    map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+    map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
+    map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
+    
+    df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
+    
+    mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
+    if mask_cab.any():
+        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
+        
+    mask_cep = df_res['CEP_Limpo'].isin(map_cep)
+    if mask_cep.any():
+        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
+        
+    df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
+    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
+    return df_res
+
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'
 
@@ -426,6 +453,9 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.ia_resultado = saved_state.get('ia_resultado', [])
                     st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
                     st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
+                    
+                    st.session_state.cidade_selecionada_backup = saved_state.get('cidade_selecionada_backup')
+                    st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
                     st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
                     st.session_state.loaded_ibge_bytes = zf.read('mapa.zip')
@@ -535,13 +565,20 @@ with timer("2. Limpeza e de_para global"):
 st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
 expandir_mapa = st.sidebar.checkbox("⛶ Layout Amplo das Abas", value=False, help="Remove as métricas laterais para dar mais espaço à tabela.")
+
 cidades_disponiveis = sorted(df_vol['Cidade'].unique())
-cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
+cidade_salva = st.session_state.get('cidade_selecionada_backup')
+if cidade_salva in cidades_disponiveis:
+    cidade_padrao = cidades_disponiveis.index(cidade_salva)
+else:
+    cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
+
 cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
 if 'cidade_selecionada_prev' not in st.session_state:
-    st.session_state.cidade_selecionada_prev = cidade_selecionada
-elif st.session_state.cidade_selecionada_prev != cidade_selecionada:
+    st.session_state.cidade_selecionada_prev = st.session_state.get('cidade_selecionada_backup', cidade_selecionada)
+
+if st.session_state.cidade_selecionada_prev != cidade_selecionada:
     st.session_state.regras_simulacao = []
     if 'ia_resultado' in st.session_state:
         del st.session_state['ia_resultado']
@@ -554,7 +591,11 @@ gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
 bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
 lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if st.session_state.modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
-bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, default=[])
+
+bairros_salvos = st.session_state.get('bairros_selecionados_backup', [])
+bairros_padrao = [b for b in bairros_salvos if b in bairros_da_cidade]
+
+bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, default=bairros_padrao)
 
 if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
 else: df_cidade_orig = df_cidade_full.copy()
@@ -1077,7 +1118,9 @@ with col_btn:
         'cores_transp': st.session_state.get('cores_transp', {}),
         'ia_resultado': st.session_state.get('ia_resultado', []),
         'de_para_bairros': st.session_state.get('de_para_bairros', {}),
-        'modo_analise': st.session_state.get('modo_analise', '🏙️ Intra-Município (Por Bairros)')
+        'modo_analise': st.session_state.get('modo_analise', '🏙️ Intra-Município (Por Bairros)'),
+        'cidade_selecionada_backup': cidade_selecionada,
+        'bairros_selecionados_backup': bairros_selecionados
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
     
@@ -1510,9 +1553,33 @@ with aba3:
                 with st.expander("🚨 Ver lista de CEPs Compartilhados"):
                     st.dataframe(df_shared, use_container_width=True, hide_index=True)
             
-            map_atual = df_cidade_orig.groupby(df_cidade_orig['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-            df_oficial_orig = df_cidade_oficial.copy()
-            df_oficial_orig['Transportadora'] = df_oficial_orig[chave_oficial].map(map_atual).fillna('Sem Atendimento')
+            def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
+                df_res = df_oficial.copy()
+                df_ref_safe = df_referencia.copy()
+                
+                df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+                df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+                df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
+                
+                map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+                map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
+                map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
+                
+                df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
+                
+                mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
+                if mask_cab.any():
+                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
+                    
+                mask_cep = df_res['CEP_Limpo'].isin(map_cep)
+                if mask_cep.any():
+                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
+                    
+                df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
+                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
+                return df_res
+            
+            df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, chave_oficial)
             if is_regional: df_oficial_orig = df_oficial_orig[df_oficial_orig['Transportadora'] != 'Sem Atendimento']
             
             df_range_orig = gerar_ranges_cep(df_oficial_orig, dict_limites=limites_expandidos, is_regional=is_regional)
@@ -1528,9 +1595,8 @@ with aba3:
                 
                 st.markdown("---")
                 st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
-                map_sim = df_cidade_sim.groupby(df_cidade_sim['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-                df_oficial_sim = df_cidade_oficial.copy()
-                df_oficial_sim['Transportadora'] = df_oficial_sim[chave_oficial].map(map_sim).fillna('Sem Atendimento')
+                
+                df_oficial_sim = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_sim, chave_oficial)
                 if is_regional: df_oficial_sim = df_oficial_sim[df_oficial_sim['Transportadora'] != 'Sem Atendimento']
                 
                 df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
@@ -1546,9 +1612,8 @@ with aba3:
                 if 'ia_resultado' in st.session_state and st.session_state.ia_resultado:
                     st.markdown("---")
                     st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
-                    map_ia = df_cidade_ia_temp.groupby(df_cidade_ia_temp['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-                    df_oficial_ia = df_cidade_oficial.copy()
-                    df_oficial_ia['Transportadora'] = df_oficial_ia[chave_oficial].map(map_ia).fillna('Sem Atendimento')
+                    
+                    df_oficial_ia = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_ia_temp, chave_oficial)
                     if is_regional: df_oficial_ia = df_oficial_ia[df_oficial_ia['Transportadora'] != 'Sem Atendimento']
                     
                     df_range_ia = gerar_ranges_cep(df_oficial_ia, dict_limites=limites_expandidos, is_regional=is_regional)

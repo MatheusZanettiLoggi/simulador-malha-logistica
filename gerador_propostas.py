@@ -242,7 +242,6 @@ def formatar_excel_resumo(writer):
                     if is_header:
                         cell.font = font_cabecalho
                     elif is_total:
-                        # Aplica fundo rosa/texto vermelho nos impactos da linha de total
                         if cell.column_letter in cols_impacto:
                             cell.font = font_destaque_red
                             cell.fill = fill_red
@@ -362,7 +361,6 @@ def generate_html_pdf(nome_destino, estrategia, cidades_movimentadas_str, df_com
         <div class="header-meta">Gerado em: {data_extracao} | Lead/Destino: {nome_destino}</div>
     """
 
-    # --- 1. RESUMO GERAL ---
     html_content += f"""<h2>1. RESUMO COMPARATIVO DE CENÁRIOS</h2>"""
     df_resumo_html = df_comparativo.copy()
     for c in df_resumo_html.columns:
@@ -621,7 +619,7 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                     config_key = f"{','.join(leves_selecionados)}_{nome_destino_final}"
                     if "mov_config_key" not in st.session_state or st.session_state.mov_config_key != config_key:
                         df_abrangencia_alvo = df_abrangencia[df_abrangencia['LMC Name'].isin(leves_selecionados)].copy()
-                        # DEDUPLICAR NA ORIGEM BLINDA ERROS DE VOLUME E FATUREMENTO
+                        # DEDUPLICAR NA ORIGEM BLINDA ERROS DE VOLUME E FATURAMENTO
                         df_mov = df_abrangencia_alvo[['LMC Name', 'Região de preço', 'Cidade', 'State']].drop_duplicates(subset=['LMC Name', 'Cidade']).copy()
                         df_mov['Destino'] = "Manter no Leve Atual"
                         st.session_state.df_movimentacao = df_mov
@@ -1073,12 +1071,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"**Faturamento Projetado:** {f_novo}")
                                     st.markdown(f"**Ticket Médio:** {t_novo}")
                                     
-                                    # CÓDIGO CORRIGIDO: Retirado o sinal de "-" no string para forçar a seta vermelha para cima no Streamlit
+                                    # REMOVIDO: O sinal de menos (-) no Aumento de Custo, forçando explicitamente "+" para Seta Vermelha ↑
                                     if imp > 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"{formatar_moeda(imp)} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"+ {formatar_moeda(imp)} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#ff4b4b'>▲ +{imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     elif imp < 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"-{formatar_moeda(abs(imp))} (Economia)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"- {formatar_moeda(abs(imp))} (Economia)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#09ab3b'>▼ {imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     else:
                                         st.markdown(f"**Diferença Mensal:** <span style='color:gray'>■ R$ 0,00</span>", unsafe_allow_html=True)
@@ -1170,12 +1168,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Volumetria Total: {int(m['vol_loggi']):,} pacotes</span>", unsafe_allow_html=True)
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Ticket Médio Novo: {formatar_moeda(m['tk_loggi_novo'])}</span>", unsafe_allow_html=True)
                                 with cl3:
-                                    # CÓDIGO CORRIGIDO NA ABA CENÁRIO: Retirado o sinal de "-" no string para forçar a seta vermelha para cima no Streamlit
+                                    # CÓDIGO CORRIGIDO: Retirado o sinal de "-" para forçar a seta vermelha para cima no Streamlit no aumento de budget da Loggi
                                     if m['imp_loggi'] > 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"{formatar_moeda(m['imp_loggi'])} (Aumento)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"+ {formatar_moeda(m['imp_loggi'])} (Aumento de Custo)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #ff4b4b; font-weight: bold;'>▲ +{m['perc_imp_loggi']:.2f}% de impacto no budget</span>", unsafe_allow_html=True)
                                     elif m['imp_loggi'] < 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"-{formatar_moeda(abs(m['imp_loggi']))} (Economia)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"- {formatar_moeda(abs(m['imp_loggi']))} (Economia)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #09ab3b; font-weight: bold;'>▼ {m['perc_imp_loggi']:.2f}% de economia no budget</span>", unsafe_allow_html=True)
                                     else:
                                         st.metric("Impacto Financeiro Loggi", "R$ 0,00", "Neutro")
@@ -1200,10 +1198,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                             st.markdown(f"**Novo Custo:** {formatar_moeda(dados['custo_novo'])}")
                                             st.markdown(f"<span style='font-size: 0.8em; color: gray;'>Vol: {int(dados['vol']):,} | Tk: {formatar_moeda(tk_r_nov)}</span>", unsafe_allow_html=True)
                                         with cd3:
-                                            color = "gray"
-                                            if imp_r > 0: color = "#ff4b4b"
-                                            elif imp_r < 0: color = "#09ab3b"
-                                            st.markdown(f"**Variação:** <span style='color: {color}; font-weight: bold;'>{formatar_moeda(imp_r)} ({perc_r:+.2f}%)</span>", unsafe_allow_html=True)
+                                            if imp_r > 0:
+                                                st.markdown(f"**Variação:** <span style='color: #ff4b4b; font-weight: bold;'>▲ +{formatar_moeda(imp_r)} ({perc_r:+.2f}%)</span>", unsafe_allow_html=True)
+                                            elif imp_r < 0:
+                                                st.markdown(f"**Variação:** <span style='color: #09ab3b; font-weight: bold;'>▼ -{formatar_moeda(abs(imp_r))} ({perc_r:+.2f}%)</span>", unsafe_allow_html=True)
+                                            else:
+                                                st.markdown(f"**Variação:** <span style='color: gray; font-weight: bold;'>■ R$ 0,00 (0.00%)</span>", unsafe_allow_html=True)
 
                                 st.divider()
                                 st.markdown(f"### 📄 PROPOSTA FINAL PARA O LEAD ({cen})")

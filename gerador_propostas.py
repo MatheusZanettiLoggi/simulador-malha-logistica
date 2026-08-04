@@ -1072,12 +1072,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"**Faturamento Projetado:** {f_novo}")
                                     st.markdown(f"**Ticket Médio:** {t_novo}")
                                     
-                                    # CORREÇÃO DA SETA: Removido qualquer espaço ou sinal conflitante antes do R$ para que o Streamlit force a seta correta.
+                                    # CORREÇÃO DA SETA: Removido QUALQUER ESPAÇO entre o sinal e o R$
                                     if imp > 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"+R$ {formatar_moeda(imp).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"+R${formatar_moeda(imp).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#ff4b4b'>▲ +{imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     elif imp < 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(abs(imp)), f"-R$ {formatar_moeda(abs(imp)).replace('R$ ', '')} (Economia)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(abs(imp)), f"-R${formatar_moeda(abs(imp)).replace('R$ ', '')} (Economia)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#09ab3b'>▼ {imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     else:
                                         st.markdown(f"**Diferença Mensal:** <span style='color:gray'>■ R$ 0,00</span>", unsafe_allow_html=True)
@@ -1171,10 +1171,10 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                 with cl3:
                                     # CORREÇÃO DA SETA: Forçando sinal explícito sem espaços para formatar vermelho e para cima na UI
                                     if m['imp_loggi'] > 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"+R$ {formatar_moeda(m['imp_loggi']).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"+R${formatar_moeda(m['imp_loggi']).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #ff4b4b; font-weight: bold;'>▲ +{m['perc_imp_loggi']:.2f}% de impacto no budget</span>", unsafe_allow_html=True)
                                     elif m['imp_loggi'] < 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(abs(m['imp_loggi'])), f"-R$ {formatar_moeda(abs(m['imp_loggi'])).replace('R$ ', '')} (Economia)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(abs(m['imp_loggi'])), f"-R${formatar_moeda(abs(m['imp_loggi'])).replace('R$ ', '')} (Economia)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #09ab3b; font-weight: bold;'>▼ {m['perc_imp_loggi']:.2f}% de economia no budget</span>", unsafe_allow_html=True)
                                     else:
                                         st.metric("Impacto Financeiro Loggi", "R$ 0,00", "Neutro")

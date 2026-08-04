@@ -21,6 +21,12 @@ st.set_page_config(page_title="Gerador de Propostas - Leves", layout="wide")
 st.title("📦 Gerador de Propostas e Movimentação de Leves")
 st.markdown("Bem-vindo! Faça o upload das bases extraídas do Looker para começar.")
 
+# --- SISTEMA DE DIAGNÓSTICO ---
+diagnostic_log = [f"--- DIAGNÓSTICO DO SISTEMA LOGGI ---", f"Data/Hora: {datetime.now(timezone(timedelta(hours=-3)))}", f"Streamlit Versão: {st.__version__}\n"]
+
+def add_log(msg):
+    diagnostic_log.append(str(msg))
+
 # --- BARRA LATERAL: UPLOADS E LINKS LOOKER ---
 with st.sidebar.expander("1. Upload de Bases de Dados", expanded=True):
     st.markdown("**Tabelas frete peso praticadas**")
@@ -42,7 +48,7 @@ with st.sidebar.expander("1. Upload de Bases de Dados", expanded=True):
     st.markdown("[Link Looker: 26302](https://loggi.looker.com/looks/26302)")
     file_volume = st.file_uploader("Upload Volume", type=["xlsx", "csv"], label_visibility="collapsed")
 
-st.sidebar.markdown("<br><hr><div style='text-align: center;'><small>Desenvolvido por <b>Matheus Zanetti</b></small></div>", unsafe_allow_html=True)
+st.sidebar.markdown("<br><hr>", unsafe_allow_html=True)
 
 # --- INICIALIZAÇÃO DE ESTADOS E CORES ---
 if "num_cenarios" not in st.session_state:
@@ -242,7 +248,6 @@ def formatar_excel_resumo(writer):
                     if is_header:
                         cell.font = font_cabecalho
                     elif is_total:
-                        # Aplica fundo rosa/texto vermelho nos impactos da linha de total
                         if cell.column_letter in cols_impacto:
                             cell.font = font_destaque_red
                             cell.fill = fill_red
@@ -506,6 +511,8 @@ if file_frete and file_abrangencia and file_slos and file_volume:
             df_slos = padronizar_colunas_slos(df_slos)
             df_volume = padronizar_colunas_volume(df_volume)
             
+            add_log("Bases carregadas com sucesso.")
+            
         if 'Leve' not in df_volume.columns or 'Routing Code' not in df_volume.columns:
             st.error("🚨 **Colunas básicas ausentes no arquivo de Volume!**")
             st.stop()
@@ -538,6 +545,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
             df_volume = df_volume_grouped
             
         st.sidebar.success("Todas as bases carregadas e padronizadas!")
+        st.sidebar.download_button(
+            label="📥 Baixar Diagnóstico do App",
+            data="\n".join(diagnostic_log),
+            file_name=f"diagnostico_loggi_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+            mime="text/plain"
+        )
     
         with st.expander("2. Seleção de Leves", expanded=True):
             leves_disponiveis = df_frete_clean['LMC name'].dropna().unique().tolist()
@@ -1072,15 +1085,17 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"**Faturamento Projetado:** {f_novo}")
                                     st.markdown(f"**Ticket Médio:** {t_novo}")
                                     
-                                    # CORREÇÃO DA SETA: Removido QUALQUER ESPAÇO entre o sinal e o R$
+                                    # CONTROLE HTML BLINDADO (Sem usar delta do Streamlit para evitar bugs visuais)
+                                    st.metric("Diferença Mensal", formatar_moeda(abs(imp)))
+                                    
                                     if imp > 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"+R${formatar_moeda(imp).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
+                                        st.markdown(f"<div style='color: #ff4b4b; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>▲ +{formatar_moeda(imp)} (Aumento de Custo)</div>", unsafe_allow_html=True)
                                         st.markdown(f"**% Aumento:** <span style='color:#ff4b4b'>▲ +{imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     elif imp < 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(abs(imp)), f"-R${formatar_moeda(abs(imp)).replace('R$ ', '')} (Economia)", delta_color="inverse", label_visibility="collapsed")
+                                        st.markdown(f"<div style='color: #09ab3b; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>▼ -{formatar_moeda(abs(imp))} (Economia)</div>", unsafe_allow_html=True)
                                         st.markdown(f"**% Aumento:** <span style='color:#09ab3b'>▼ {imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     else:
-                                        st.markdown(f"**Diferença Mensal:** <span style='color:gray'>■ R$ 0,00</span>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='color: gray; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>■ R$ 0,00 (Neutro)</div>", unsafe_allow_html=True)
                                         st.markdown(f"**% Aumento:** <span style='color:gray'>■ 0.00%</span>", unsafe_allow_html=True)
                             
                             st.divider()
@@ -1169,16 +1184,16 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Volumetria Total: {int(m['vol_loggi']):,} pacotes</span>", unsafe_allow_html=True)
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Ticket Médio Novo: {formatar_moeda(m['tk_loggi_novo'])}</span>", unsafe_allow_html=True)
                                 with cl3:
-                                    # CORREÇÃO DA SETA: Forçando sinal explícito sem espaços para formatar vermelho e para cima na UI
+                                    st.metric("Impacto Financeiro Loggi", formatar_moeda(abs(m['imp_loggi'])))
                                     if m['imp_loggi'] > 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"+R${formatar_moeda(m['imp_loggi']).replace('R$ ', '')} (Aumento de Custo)", delta_color="inverse")
-                                        st.markdown(f"<span style='font-size: 0.9em; color: #ff4b4b; font-weight: bold;'>▲ +{m['perc_imp_loggi']:.2f}% de impacto no budget</span>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='color: #ff4b4b; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>▲ +{formatar_moeda(m['imp_loggi'])} (Aumento de Custo)</div>", unsafe_allow_html=True)
+                                        st.markdown(f"**% Aumento:** <span style='color:#ff4b4b'>▲ +{m['perc_imp_loggi']:.2f}% de impacto no budget</span>", unsafe_allow_html=True)
                                     elif m['imp_loggi'] < 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(abs(m['imp_loggi'])), f"-R${formatar_moeda(abs(m['imp_loggi'])).replace('R$ ', '')} (Economia)", delta_color="inverse")
-                                        st.markdown(f"<span style='font-size: 0.9em; color: #09ab3b; font-weight: bold;'>▼ {m['perc_imp_loggi']:.2f}% de economia no budget</span>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='color: #09ab3b; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>▼ -{formatar_moeda(abs(m['imp_loggi']))} (Economia)</div>", unsafe_allow_html=True)
+                                        st.markdown(f"**% Aumento:** <span style='color:#09ab3b'>▼ {m['perc_imp_loggi']:.2f}% de economia no budget</span>", unsafe_allow_html=True)
                                     else:
-                                        st.metric("Impacto Financeiro Loggi", "R$ 0,00", "Neutro")
-                                        st.markdown(f"<span style='font-size: 0.9em; color: gray;'>0.00%</span>", unsafe_allow_html=True)
+                                        st.markdown(f"<div style='color: gray; font-weight: bold; font-size: 14px; margin-top: -15px; margin-bottom: 10px;'>■ R$ 0,00 (Neutro)</div>", unsafe_allow_html=True)
+                                        st.markdown(f"**% Aumento:** <span style='color:gray'>■ 0.00%</span>", unsafe_allow_html=True)
                                 
                                 if m['detalhes_regioes']:
                                     st.markdown(f"#### 🔍 Detalhamento das Regiões ({cen})")

@@ -1071,12 +1071,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"**Faturamento Projetado:** {f_novo}")
                                     st.markdown(f"**Ticket Médio:** {t_novo}")
                                     
-                                    # REMOVIDO: O sinal de menos (-) no Aumento de Custo, forçando explicitamente "+" para Seta Vermelha ↑
+                                    # REMOVIDOS quaisquer sinais explícitos para o Streamlit processar o valor puro. Valores positivos mostram Seta P/ Cima e ficam em Vermelho.
                                     if imp > 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"+ {formatar_moeda(imp)} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"{formatar_moeda(imp)} (Aumento de Custo)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#ff4b4b'>▲ +{imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     elif imp < 0:
-                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"- {formatar_moeda(abs(imp))} (Economia)", delta_color="inverse", label_visibility="collapsed")
+                                        st.metric("Diferença Mensal", formatar_moeda(imp), f"-{formatar_moeda(abs(imp))} (Economia)", delta_color="inverse", label_visibility="collapsed")
                                         st.markdown(f"**% Aumento:** <span style='color:#09ab3b'>▼ {imp_perc:.2f}%</span>", unsafe_allow_html=True)
                                     else:
                                         st.markdown(f"**Diferença Mensal:** <span style='color:gray'>■ R$ 0,00</span>", unsafe_allow_html=True)
@@ -1095,6 +1095,7 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                 elif "Vol" in c:
                                     df_disp[c] = df_disp[c].apply(lambda x: f"{int(x):,}".replace(",", ".") if pd.notna(x) else "-")
                             
+                            # Tabela HTML Customizada
                             html_table = f"""
                             <div style="overflow-x: auto; width: 100%;">
                             <style>
@@ -1168,12 +1169,12 @@ if file_frete and file_abrangencia and file_slos and file_volume:
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Volumetria Total: {int(m['vol_loggi']):,} pacotes</span>", unsafe_allow_html=True)
                                     st.markdown(f"<span style='font-size: 0.9em; color: gray;'>Ticket Médio Novo: {formatar_moeda(m['tk_loggi_novo'])}</span>", unsafe_allow_html=True)
                                 with cl3:
-                                    # CÓDIGO CORRIGIDO: Retirado o sinal de "-" para forçar a seta vermelha para cima no Streamlit no aumento de budget da Loggi
+                                    # REMOVIDOS quaisquer sinais explícitos para o Streamlit processar o valor puro. Valores positivos mostram Seta P/ Cima e ficam em Vermelho.
                                     if m['imp_loggi'] > 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"+ {formatar_moeda(m['imp_loggi'])} (Aumento de Custo)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"{formatar_moeda(m['imp_loggi'])} (Aumento de Custo)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #ff4b4b; font-weight: bold;'>▲ +{m['perc_imp_loggi']:.2f}% de impacto no budget</span>", unsafe_allow_html=True)
                                     elif m['imp_loggi'] < 0:
-                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"- {formatar_moeda(abs(m['imp_loggi']))} (Economia)", delta_color="inverse")
+                                        st.metric("Impacto Financeiro Loggi", formatar_moeda(m['imp_loggi']), f"-{formatar_moeda(abs(m['imp_loggi']))} (Economia)", delta_color="inverse")
                                         st.markdown(f"<span style='font-size: 0.9em; color: #09ab3b; font-weight: bold;'>▼ {m['perc_imp_loggi']:.2f}% de economia no budget</span>", unsafe_allow_html=True)
                                     else:
                                         st.metric("Impacto Financeiro Loggi", "R$ 0,00", "Neutro")

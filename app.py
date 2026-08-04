@@ -371,31 +371,41 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Garante precisão granular)
+# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
     
     df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+    df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
+    
     df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
     df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
     
-    map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-    map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
-    map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
-    
+    # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
+    map_bairro = df_ref_safe.groupby('Bairro_limpo')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
     df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
     
-    mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
+    # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação do Looker)
+    df_ref_safe['Chave_Cabeca'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['Cabeca_CEP']
+    map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_Cabeca_res'] = df_res[chave_bairro] + "_" + df_res['Cabeca_CEP_tmp']
+    mask_cab = df_res['Chave_Cabeca_res'].isin(map_cabeca)
     if mask_cab.any():
-        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
+        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
         
-    mask_cep = df_res['CEP_Limpo'].isin(map_cep)
+    # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
+    df_ref_safe['Chave_CEP'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['CEP_Limpo']
+    map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_CEP_res'] = df_res[chave_bairro] + "_" + df_res['CEP_Limpo']
+    mask_cep = df_res['Chave_CEP_res'].isin(map_cep)
     if mask_cep.any():
-        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
+        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'Chave_CEP_res'].map(map_cep)
         
     df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
-    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
+    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Cabeca_res', 'Chave_CEP_res'])
     return df_res
 
 if 'app_mode' not in st.session_state:
@@ -884,10 +894,9 @@ st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
 # Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
-@st.cache_data(show_spinner=False)
-def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
+def extrair_pontos_bairros(gdf_cidade_local):
     dict_pontos = {}
-    for _, row in _gdf_cidade.iterrows():
+    for _, row in gdf_cidade_local.iterrows():
         geom = row['geometry']
         if pd.notnull(geom):
             b_id = row['Join_Bairro']
@@ -915,12 +924,13 @@ def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
             dict_pontos[b_id] = pts
     return dict_pontos
 
-dict_bairros_pontos_espalhados = extrair_pontos_bairros(cidade_selecionada, gdf_cidade)
+# Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
+dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
-# Apenas para o Algoritmo da IA conseguir traçar a linha reta
-def extrair_centroides_ia(gdf_cidade):
+# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
+def extrair_centroides_ia(gdf_cidade_local):
     dict_centroids = {}
-    for _, row in gdf_cidade.iterrows():
+    for _, row in gdf_cidade_local.iterrows():
         if pd.notnull(row['geometry']):
             dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
     return dict_centroids
@@ -977,7 +987,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False, bairros_ativos=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -986,7 +996,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
     ).add_to(m)
     
-    bairros_selec_safe = globals().get('bairros_selecionados', [])
+    bairros_selec_safe = bairros_ativos if bairros_ativos else []
     
     cols = list(df_pontos.columns)
     idx_bairro_id = cols.index('Join_Bairro')
@@ -1016,39 +1026,62 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         row_ref = rows[0]
         bairro_id = row_ref[idx_bairro_id]
         
+        # Recupera as posições do cep. Fallback seguro caso o bairro não tenha vindo no shape.
         if bairro_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[bairro_id]
-            
-            # Escolhe 1 ponto válido validado pelo "Contains" do Shapely
-            h_cep = hash(cep)
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             lat_center, lon_center = valid_points[h_cep % len(valid_points)]
+        elif bairro_id in dict_bairros_centroides:
+            lat_center, lon_center = dict_bairros_centroides[bairro_id]
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
+            lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
+        else:
+            lat_center, lon_center = cy, cx
             
-            qtd_real = len(rows)
-            qtd_bases = row_ref[idx_qtd_bases]
-            parceiros_str = row_ref[idx_parceiros]
-            siglas_parceiros = extrair_siglas(parceiros_str)
+        qtd_real = len(rows)
+        qtd_bases = row_ref[idx_qtd_bases]
+        parceiros_str = row_ref[idx_parceiros]
+        siglas_parceiros = extrair_siglas(parceiros_str)
+        
+        for idx, r_base in enumerate(rows):
+            transp = r_base[idx_transp]
+            cor = st.session_state.cores_transp.get(transp, '#333333')
             
-            for idx, r_base in enumerate(rows):
-                transp = r_base[idx_transp]
-                cor = st.session_state.cores_transp.get(transp, '#333333')
-                
-                html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
-                
-                if qtd_bases > 1:
-                    html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
-                else:
-                    html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
+            html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
+            
+            if qtd_bases > 1:
+                html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
+            else:
+                html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
 
-                if qtd_real == 1:
-                    markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
-                else:
-                    offset_r = 0.0004
-                    angle = (idx / qtd_real) * 2 * np.pi
-                    lat_pino = lat_center + offset_r * np.cos(angle)
-                    lon_pino = lon_center + offset_r * np.sin(angle)
-                    markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+            if qtd_real == 1:
+                markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
+            else:
+                offset_r = 0.0004
+                angle = (idx / qtd_real) * 2 * np.pi
+                lat_pino = lat_center + offset_r * np.cos(angle)
+                lon_pino = lon_center + offset_r * np.sin(angle)
+                markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
+    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT (Livre da criptografia falha do MacroElement/Jinja)
+    map_id = m.get_name()
+    js_code = f"""
+    var markers = {json.dumps(markers_data)};
+    for (var i=0; i<markers.length; i++) {{
+        var data = markers[i];
+        var circle = L.circleMarker([data[0], data[1]], {{
+            radius: data[3],
+            color: 'white',
+            weight: 0.5,
+            fill: true,
+            fillColor: data[2],
+            fillOpacity: 0.9
+        }}).addTo({map_id});
+        circle.bindTooltip(data[4]);
+    }}
+    """
+    m.get_root().script.add_child(folium.Element(js_code))
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1161,7 +1194,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1266,7 +1299,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1436,7 +1469,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1558,25 +1591,35 @@ with aba3:
                 df_ref_safe = df_referencia.copy()
                 
                 df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+                df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
+                
                 df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
                 df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
                 
-                map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-                map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
-                map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
-                
+                # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
+                map_bairro = df_ref_safe.groupby('Bairro_limpo')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
                 df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
                 
-                mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
+                # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação do Looker)
+                df_ref_safe['Chave_Cabeca'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['Cabeca_CEP']
+                map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
+                
+                df_res['Chave_Cabeca_res'] = df_res[chave_bairro] + "_" + df_res['Cabeca_CEP_tmp']
+                mask_cab = df_res['Chave_Cabeca_res'].isin(map_cabeca)
                 if mask_cab.any():
-                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
+                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
                     
-                mask_cep = df_res['CEP_Limpo'].isin(map_cep)
+                # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
+                df_ref_safe['Chave_CEP'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['CEP_Limpo']
+                map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
+                
+                df_res['Chave_CEP_res'] = df_res[chave_bairro] + "_" + df_res['CEP_Limpo']
+                mask_cep = df_res['Chave_CEP_res'].isin(map_cep)
                 if mask_cep.any():
-                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
+                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'Chave_CEP_res'].map(map_cep)
                     
                 df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
-                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
+                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Cabeca_res', 'Chave_CEP_res'])
                 return df_res
             
             df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, chave_oficial)

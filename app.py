@@ -309,7 +309,10 @@ def otimizar_base_global(df_raw, de_para_dict):
     modes = df.groupby('Join_Bairro')['Bairro'].agg(lambda x: x.mode()[0] if not x.empty else x.iloc[0]).to_dict()
     df['Bairro'] = df['Join_Bairro'].map(modes)
     
-    return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
+    # Criar chave única combinando Cidade e Bairro para evitar colisão de nomes
+    df['Chave_Local'] = df['Join_Cidade'] + "_" + df['Join_Bairro']
+    
+    return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Chave_Local', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
 
 @st.cache_data
 def load_dados(excel_file, zip_file, modo):
@@ -354,6 +357,7 @@ def load_dados(excel_file, zip_file, modo):
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
+        
         gdf['Join_Cidade'] = gdf['NM_MUN'].apply(limpa_texto) if 'NM_MUN' in gdf.columns else ""
         gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
@@ -363,16 +367,20 @@ def load_dados(excel_file, zip_file, modo):
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
+        
         gdf['Join_Cidade'] = 'VISAO REGIONAL (ESTADO COMPLETO)'
         gdf['Join_Bairro'] = gdf['NM_MUN'].apply(limpa_texto) if 'NM_MUN' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_MUN'] if 'NM_MUN' in gdf.columns else "Desconhecido"
         
     df_vol['Cabeca_CEP'] = df_vol[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5]
     
+    # Criar chave única para o GDF também
+    gdf['Chave_Local'] = gdf['Join_Cidade'] + "_" + gdf['Join_Bairro']
+    
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Garante precisão granular)
-def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
+# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
+def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
     
@@ -380,22 +388,38 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
     df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
     df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
     
-    map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-    map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
-    map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
+    # A chave para cruzamento precisa envolver Cidade e Bairro para evitar sobrescrever nomes repetidos
+    if is_regional:
+        df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto)
+        df_res['Chave_Match'] = df_res['municipio_limpo']
+    else:
+        df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto) + "_" + df_ref_safe['Bairro'].apply(limpa_texto)
+        df_res['Chave_Match'] = df_res['municipio_limpo'] + "_" + df_res['bairro_limpo']
     
-    df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
+    # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
+    map_bairro = df_ref_safe.groupby('Chave_Match')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
+    df_res['Transportadora'] = df_res['Chave_Match'].map(map_bairro)
     
-    mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
+    # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação)
+    df_ref_safe['Chave_Cabeca'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['Cabeca_CEP']
+    map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_Cabeca_res'] = df_res['Chave_Match'] + "_" + df_res['Cabeca_CEP_tmp']
+    mask_cab = df_res['Chave_Cabeca_res'].isin(map_cabeca)
     if mask_cab.any():
-        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
+        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
         
-    mask_cep = df_res['CEP_Limpo'].isin(map_cep)
+    # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
+    df_ref_safe['Chave_CEP'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['CEP_Limpo']
+    map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_CEP_res'] = df_res['Chave_Match'] + "_" + df_res['CEP_Limpo']
+    mask_cep = df_res['Chave_CEP_res'].isin(map_cep)
     if mask_cep.any():
-        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
+        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'Chave_CEP_res'].map(map_cep)
         
     df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
-    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
+    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Match', 'Chave_Cabeca_res', 'Chave_CEP_res'])
     return df_res
 
 if 'app_mode' not in st.session_state:
@@ -454,7 +478,7 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
                     st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
                     
-                    st.session_state.cidade_selecionada_backup = saved_state.get('cidade_selecionada_backup')
+                    st.session_state.cidades_selecionadas_backup = saved_state.get('cidades_selecionadas_backup', [])
                     st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
                     st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
@@ -548,8 +572,8 @@ if 'cores_transp' not in st.session_state:
     st.session_state.cores_transp = {}
     
 cores_padrao = ['#9b59b6', '#e67e22', '#3498db', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#ff9ff3', '#00cec9', '#fdcb6e']
-todas_transp = sorted(df_vol_raw['Transportadora'].unique())
-for i, transp in enumerate(todas_transp):
+todas_transp_globais = sorted([t for t in df_vol_raw['Transportadora'].unique() if t != TAG_MISSORTING])
+for i, transp in enumerate(todas_transp_globais):
     if transp not in st.session_state.cores_transp:
         st.session_state.cores_transp[transp] = cores_padrao[i % len(cores_padrao)]
         
@@ -566,56 +590,100 @@ st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
 expandir_mapa = st.sidebar.checkbox("⛶ Layout Amplo das Abas", value=False, help="Remove as métricas laterais para dar mais espaço à tabela.")
 
+# FILTRO 1: CIDADES (MULTISELECT)
 cidades_disponiveis = sorted(df_vol['Cidade'].unique())
-cidade_salva = st.session_state.get('cidade_selecionada_backup')
-if cidade_salva in cidades_disponiveis:
-    cidade_padrao = cidades_disponiveis.index(cidade_salva)
+cidades_salvas = st.session_state.get('cidades_selecionadas_backup', [])
+if cidades_salvas:
+    cidades_padrao = [c for c in cidades_salvas if c in cidades_disponiveis]
 else:
-    cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
+    cidades_padrao = ["Rio de Janeiro"] if "Rio de Janeiro" in cidades_disponiveis else ([cidades_disponiveis[0]] if cidades_disponiveis else [])
 
-cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
+cidades_selecionadas = st.sidebar.multiselect("📍 1. Selecione a Região/Cidade (Vazio = Todas):", cidades_disponiveis, default=cidades_padrao)
 
-if 'cidade_selecionada_prev' not in st.session_state:
-    st.session_state.cidade_selecionada_prev = st.session_state.get('cidade_selecionada_backup', cidade_selecionada)
+if 'cidades_selecionadas_prev' not in st.session_state:
+    st.session_state.cidades_selecionadas_prev = st.session_state.get('cidades_selecionadas_backup', cidades_selecionadas)
 
-if st.session_state.cidade_selecionada_prev != cidade_selecionada:
+if st.session_state.cidades_selecionadas_prev != cidades_selecionadas:
     st.session_state.regras_simulacao = []
     if 'ia_resultado' in st.session_state:
         del st.session_state['ia_resultado']
     if 'bases_ativas_ia_prev' in st.session_state:
         st.session_state.bases_ativas_ia_prev = []
-    st.session_state.cidade_selecionada_prev = cidade_selecionada
+    st.session_state.cidades_selecionadas_prev = cidades_selecionadas
 
-df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
-gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
+if cidades_selecionadas:
+    df_base_tmp = df_vol[df_vol['Cidade'].isin(cidades_selecionadas)].copy()
+else:
+    df_base_tmp = df_vol.copy()
 
-bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
-lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if st.session_state.modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
-
+# FILTRO 2: BAIRROS (MULTISELECT)
+bairros_da_cidade = sorted(df_base_tmp['Bairro'].unique())
 bairros_salvos = st.session_state.get('bairros_selecionados_backup', [])
 bairros_padrao = [b for b in bairros_salvos if b in bairros_da_cidade]
 
-bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, default=bairros_padrao)
+bairros_selecionados = st.sidebar.multiselect("🏘️ 2. Filtrar Bairro(s) (Vazio = Todos):", bairros_da_cidade, default=bairros_padrao)
 
-if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
-else: df_cidade_orig = df_cidade_full.copy()
+if bairros_selecionados: 
+    df_base_tmp = df_base_tmp[df_base_tmp['Bairro'].isin(bairros_selecionados)].copy()
+
+# FILTRO 3: PARCEIROS (INDEPENDENTE)
+transp_locais = set(df_base_tmp['Transportadora'].unique())
+transp_simuladas = set([r['destino'] for r in st.session_state.regras_simulacao])
+if 'ia_resultado' in st.session_state:
+    transp_simuladas.update([r['destino'] for r in st.session_state.ia_resultado])
+
+default_transp = sorted(list(transp_locais.union(transp_simuladas).intersection(set(todas_transp_globais))))
+
+transp_selecionadas_sidebar = st.sidebar.multiselect(
+    "🚚 3. Mostrar parceiros no mapa (Independente):", 
+    options=todas_transp_globais,
+    default=default_transp,
+    help="Se você selecionar uma base que atende outras cidades fora do filtro acima, ela será adicionada ao mapa e às tabelas."
+)
+
+# Injeção dos parceiros independentes na base principal
+parceiros_adicionais = [p for p in transp_selecionadas_sidebar if p not in transp_locais]
+if parceiros_adicionais:
+    df_extras = df_vol[df_vol['Transportadora'].isin(parceiros_adicionais)]
+    df_cidade_orig = pd.concat([df_base_tmp, df_extras]).drop_duplicates(subset=['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])
+else:
+    df_cidade_orig = df_base_tmp.copy()
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
-bairros_planilha = set(df_cidade_orig['Join_Bairro'])
-bairros_ibge = set(gdf_cidade['Join_Bairro'])
+# Recorte Geométrico usando a Chave Robusta
+cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
+bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
+gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa) & gdf['Join_Bairro'].isin(bairros_mapa)]
+
+bairros_planilha = set(df_cidade_orig['Chave_Local'])
+bairros_ibge = set(gdf_cidade['Chave_Local'])
 divergentes = bairros_planilha - bairros_ibge
+
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)"):
-        bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
-        bairros_ibge_vazios = gdf_cidade[~gdf_cidade['Join_Bairro'].isin(bairros_planilha)]['NM_BAIRRO_STR'].unique()
-        bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + sorted(bairros_ibge_vazios))
+        bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Chave_Local'].isin(divergentes)]['Bairro'].unique()
+        
+        bairros_ibge_raw = gdf_cidade[~gdf_cidade['Chave_Local'].isin(bairros_planilha)]
+        opcoes_ibge = []
+        for _, row_i in bairros_ibge_raw.iterrows():
+            nm_b = row_i.get('NM_BAIRRO_STR', 'Desconhecido')
+            nm_m = row_i.get('NM_MUN', '')
+            if nm_m:
+                opcoes_ibge.append(f"{nm_b} ({nm_m})")
+            else:
+                opcoes_ibge.append(nm_b)
+                
+        opcoes_ibge = sorted(list(set(opcoes_ibge)))
+        
+        bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + opcoes_ibge)
         if bairro_ibge_selecionado != "-- Nenhum --":
-            sugestoes = difflib.get_close_matches(bairro_ibge_selecionado, bairros_planilha_vazios, n=5, cutoff=0.3)
+            nome_ibge_limpo = re.sub(r'\s*\([^)]*\)$', '', bairro_ibge_selecionado).strip()
+            sugestoes = difflib.get_close_matches(nome_ibge_limpo, bairros_planilha_vazios, n=5, cutoff=0.3)
             bairro_planilha_selecionado = st.selectbox("2. Local na Planilha:", ["-- Selecione --"] + sugestoes + sorted([b for b in bairros_planilha_vazios if b not in sugestoes]))
             if st.button("Vincular", type="primary"):
                 if bairro_planilha_selecionado != "-- Selecione --":
-                    st.session_state.de_para_bairros[bairro_planilha_selecionado] = bairro_ibge_selecionado
+                    st.session_state.de_para_bairros[bairro_planilha_selecionado] = nome_ibge_limpo
                     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
                         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
                     st.rerun()
@@ -667,7 +735,7 @@ def deve_pedir_capacidade(nome_base):
 
 bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
 if bases_sem_coord or st.session_state.erros_geocoding:
-    st.title(f"📍 Configuração de Bases: {cidade_selecionada}")
+    st.title(f"📍 Configuração de Bases")
     st.info("Para liberar o dashboard, insira o endereço de cada base. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação da base na análise.")
     
     novos_enderecos = {}
@@ -773,14 +841,17 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
     
     dict_locais = {}
-    for nome in sorted([str(x) for x in gdf_cidade['NM_BAIRRO_STR'].unique() if str(x).strip() != ""]):
+    for _, row in gdf_cidade.drop_duplicates(subset=['NM_BAIRRO_STR']).iterrows():
+        nome = str(row['NM_BAIRRO_STR'])
+        if nome.strip() == "": continue
         if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)":
             cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
             uf = descobrir_uf_pelo_cep(cep_amostra)
             display_name = f"{nome} - {uf}"
         else:
-            display_name = f"{nome} - {cidade_selecionada}"
-        dict_locais[display_name] = nome
+            mun = str(row['NM_MUN']) if 'NM_MUN' in row else ""
+            display_name = f"{nome} - {mun}" if mun else f"{nome}"
+        dict_locais[display_name] = row['Chave_Local']
 
     opcoes_locais = ["-- Visão Geral do Mapa --"] + list(dict_locais.keys())
     label_busca = "🔍 Buscar Município para focar no mapa:" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "🔍 Buscar Bairro para focar no mapa:"
@@ -793,8 +864,8 @@ if bases_sem_coord or st.session_state.erros_geocoding:
         zoom_helper = 8 if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else 11
         gdf_foco = gpd.GeoDataFrame()
     else:
-        nome_real = dict_locais[local_foco_display]
-        gdf_foco = gdf_cidade[gdf_cidade['NM_BAIRRO_STR'] == nome_real]
+        chave_real = dict_locais[local_foco_display]
+        gdf_foco = gdf_cidade[gdf_cidade['Chave_Local'] == chave_real]
         if not gdf_foco.empty:
             cy_helper = gdf_foco.geometry.centroid.y.mean()
             cx_helper = gdf_foco.geometry.centroid.x.mean()
@@ -832,9 +903,8 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
         
-        for base in todas_bases_projeto:
+        for base in transp_ativas:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
             st.markdown(f"**{base}**")
             is_ignored = st.checkbox("❌ Removida (Missorting)", value=(base in st.session_state.bases_ignoradas), key=f"ignorar_edit_{base}")
@@ -851,7 +921,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     st.caption("∞ (Ilimitado)")
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -874,7 +944,6 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                 time.sleep(1)
                 st.rerun()
 
-transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", [t for t in transp_ativas if t != TAG_MISSORTING], default=[t for t in transp_ativas if t != TAG_MISSORTING])
 with st.sidebar.expander("🎨 Personalizar Cores"):
     for transp in transp_ativas:
         if transp == TAG_MISSORTING: continue
@@ -884,13 +953,12 @@ st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
 # Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
-@st.cache_data(show_spinner=False)
-def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
+def extrair_pontos_bairros(gdf_cidade_local):
     dict_pontos = {}
-    for _, row in _gdf_cidade.iterrows():
+    for _, row in gdf_cidade_local.iterrows():
         geom = row['geometry']
         if pd.notnull(geom):
-            b_id = row['Join_Bairro']
+            b_id = row['Chave_Local']
             pts = []
             minx, miny, maxx, maxy = geom.bounds
             
@@ -915,34 +983,36 @@ def extrair_pontos_bairros(cidade_nome, _gdf_cidade):
             dict_pontos[b_id] = pts
     return dict_pontos
 
-dict_bairros_pontos_espalhados = extrair_pontos_bairros(cidade_selecionada, gdf_cidade)
+# Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
+dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
-# Apenas para o Algoritmo da IA conseguir traçar a linha reta
-def extrair_centroides_ia(gdf_cidade):
+# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
+def extrair_centroides_ia(gdf_cidade_local):
     dict_centroids = {}
-    for _, row in gdf_cidade.iterrows():
+    for _, row in gdf_cidade_local.iterrows():
         if pd.notnull(row['geometry']):
-            dict_centroids[row['Join_Bairro']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+            dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
     return dict_centroids
 
 dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
 
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
-    df_pontos = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
+    df_pontos = df_cenario.groupby(['Chave_Local', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
         Volume=('Volume', 'sum')
     ).reset_index()
     
-    df_agrupado = df_cenario.groupby(['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
+    df_agrupado = df_cenario.groupby(['Chave_Local', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
         Qtd_Bases=('Transportadora', 'nunique'),
         Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
     ).reset_index()
     
-    return pd.merge(df_pontos, df_agrupado, on=['Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
+    return pd.merge(df_pontos, df_agrupado, on=['Chave_Local', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
 
 def get_visibilidade(transp):
     if transp == 'Sem Dados': return True
     if transp == TAG_MISSORTING: return True 
+    if transp not in todas_transp_globais: return True
     return transp in transp_selecionadas_sidebar
 
 def render_capacity_warnings(df_cenario, label="Cenário"):
@@ -977,7 +1047,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False, bairros_ativos=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -986,10 +1056,10 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
     ).add_to(m)
     
-    bairros_selec_safe = globals().get('bairros_selecionados', [])
+    bairros_selec_safe = bairros_ativos if bairros_ativos else []
     
     cols = list(df_pontos.columns)
-    idx_bairro_id = cols.index('Join_Bairro')
+    idx_chave_local = cols.index('Chave_Local')
     idx_bairro = cols.index('Bairro')
     idx_cep = cols.index(COLUNA_CEP)
     idx_transp = cols.index('Transportadora')
@@ -1014,39 +1084,44 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
-        bairro_id = row_ref[idx_bairro_id]
+        chave_id = row_ref[idx_chave_local]
         
-        if bairro_id in dict_bairros_pontos_espalhados:
-            valid_points = dict_bairros_pontos_espalhados[bairro_id]
-            
-            # Escolhe 1 ponto válido validado pelo "Contains" do Shapely
-            h_cep = hash(cep)
+        if chave_id in dict_bairros_pontos_espalhados:
+            valid_points = dict_bairros_pontos_espalhados[chave_id]
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             lat_center, lon_center = valid_points[h_cep % len(valid_points)]
+        elif chave_id in dict_bairros_centroides:
+            lat_center, lon_center = dict_bairros_centroides[chave_id]
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
+            lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
+        else:
+            lat_center, lon_center = cy, cx
             
-            qtd_real = len(rows)
-            qtd_bases = row_ref[idx_qtd_bases]
-            parceiros_str = row_ref[idx_parceiros]
-            siglas_parceiros = extrair_siglas(parceiros_str)
+        qtd_real = len(rows)
+        qtd_bases = row_ref[idx_qtd_bases]
+        parceiros_str = row_ref[idx_parceiros]
+        siglas_parceiros = extrair_siglas(parceiros_str)
+        
+        for idx, r_base in enumerate(rows):
+            transp = r_base[idx_transp]
+            cor = st.session_state.cores_transp.get(transp, '#333333')
             
-            for idx, r_base in enumerate(rows):
-                transp = r_base[idx_transp]
-                cor = st.session_state.cores_transp.get(transp, '#333333')
-                
-                html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
-                
-                if qtd_bases > 1:
-                    html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
-                else:
-                    html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
+            html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
+            
+            if qtd_bases > 1:
+                html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
+            else:
+                html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
 
-                if qtd_real == 1:
-                    markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
-                else:
-                    offset_r = 0.0004
-                    angle = (idx / qtd_real) * 2 * np.pi
-                    lat_pino = lat_center + offset_r * np.cos(angle)
-                    lon_pino = lon_center + offset_r * np.sin(angle)
-                    markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+            if qtd_real == 1:
+                markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
+            else:
+                offset_r = 0.0004
+                angle = (idx / qtd_real) * 2 * np.pi
+                lat_pino = lat_center + offset_r * np.cos(angle)
+                lon_pino = lon_center + offset_r * np.sin(angle)
+                markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
     FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
@@ -1102,7 +1177,10 @@ if not df_changed_sim.empty:
 else:
     df_changed_sim = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
 
-titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
+if cidades_selecionadas:
+    titulo_app = ", ".join(cidades_selecionadas[:3]) + ("..." if len(cidades_selecionadas) > 3 else "")
+else:
+    titulo_app = "Toda a Região (Estado)"
 
 col_t, col_btn = st.columns([4, 1])
 with col_t:
@@ -1119,7 +1197,7 @@ with col_btn:
         'ia_resultado': st.session_state.get('ia_resultado', []),
         'de_para_bairros': st.session_state.get('de_para_bairros', {}),
         'modo_analise': st.session_state.get('modo_analise', '🏙️ Intra-Município (Por Bairros)'),
-        'cidade_selecionada_backup': cidade_selecionada,
+        'cidades_selecionadas_backup': cidades_selecionadas,
         'bairros_selecionados_backup': bairros_selecionados
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
@@ -1132,10 +1210,12 @@ with col_btn:
         
     zip_data = buf.getvalue()
 
+    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0])}.zip" if cidades_selecionadas else "Backup_Malha_Completa.zip"
+
     st.download_button(
         label="💾 Salvar Estado da Análise",
         data=zip_data,
-        file_name=f"Backup_Malha_{limpa_texto(cidade_selecionada)}.zip",
+        file_name=nome_arquivo_backup,
         mime="application/zip",
         use_container_width=True
     )
@@ -1161,7 +1241,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1266,7 +1346,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1375,8 +1455,8 @@ with aba2:
                         for _, row in df_ia_base.iterrows():
                             cabeca = row['Cabeca_CEP']
                             if cabeca not in bairros_info_dict:
-                                bairro = row['Join_Bairro']
-                                base_y, base_x = dict_bairros_centroides.get(bairro, (cy, cx))
+                                chave_local = row['Chave_Local']
+                                base_y, base_x = dict_bairros_centroides.get(chave_local, (cy, cx))
                                 bairros_info_dict[cabeca] = {'Cabeca_CEP': cabeca, 'Vol': 0, 'lat': base_y, 'lon': base_x}
                             bairros_info_dict[cabeca]['Vol'] += row['Volume']
                                     
@@ -1436,7 +1516,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1478,8 +1558,7 @@ with aba3:
     is_regional = (st.session_state.modo_analise == "🗺️ Regional (Por Cidades)")
     
     if not is_regional:
-        cidade_oficial = limpa_texto(cidade_selecionada)
-        st.info(f"🔍 Identificamos automaticamente que a cidade **{cidade_selecionada}** pertence ao Estado **{uf_automatica}**.")
+        st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}**.")
     else:
         st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}** para a análise regional.")
     
@@ -1495,7 +1574,11 @@ with aba3:
         df_estado['bairro_limpo'] = df_estado['bairro'].apply(limpa_texto)
         
         if not is_regional:
-            df_cidade_oficial = df_estado[df_estado['municipio_limpo'] == cidade_oficial].copy()
+            if cidades_selecionadas:
+                cidades_oficiais = [limpa_texto(c) for c in cidades_selecionadas]
+                df_cidade_oficial = df_estado[df_estado['municipio_limpo'].isin(cidades_oficiais)].copy()
+            else:
+                df_cidade_oficial = df_estado.copy()
             chave_oficial = 'bairro_limpo'
         else:
             df_cidade_oficial = df_estado.copy()
@@ -1553,33 +1636,7 @@ with aba3:
                 with st.expander("🚨 Ver lista de CEPs Compartilhados"):
                     st.dataframe(df_shared, use_container_width=True, hide_index=True)
             
-            def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
-                df_res = df_oficial.copy()
-                df_ref_safe = df_referencia.copy()
-                
-                df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
-                df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
-                df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
-                
-                map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
-                map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
-                map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
-                
-                df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
-                
-                mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
-                if mask_cab.any():
-                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
-                    
-                mask_cep = df_res['CEP_Limpo'].isin(map_cep)
-                if mask_cep.any():
-                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
-                    
-                df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
-                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
-                return df_res
-            
-            df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, chave_oficial)
+            df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, is_regional)
             if is_regional: df_oficial_orig = df_oficial_orig[df_oficial_orig['Transportadora'] != 'Sem Atendimento']
             
             df_range_orig = gerar_ranges_cep(df_oficial_orig, dict_limites=limites_expandidos, is_regional=is_regional)
@@ -1596,7 +1653,7 @@ with aba3:
                 st.markdown("---")
                 st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
                 
-                df_oficial_sim = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_sim, chave_oficial)
+                df_oficial_sim = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_sim, is_regional)
                 if is_regional: df_oficial_sim = df_oficial_sim[df_oficial_sim['Transportadora'] != 'Sem Atendimento']
                 
                 df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
@@ -1613,7 +1670,7 @@ with aba3:
                     st.markdown("---")
                     st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
                     
-                    df_oficial_ia = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_ia_temp, chave_oficial)
+                    df_oficial_ia = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_ia_temp, is_regional)
                     if is_regional: df_oficial_ia = df_oficial_ia[df_oficial_ia['Transportadora'] != 'Sem Atendimento']
                     
                     df_range_ia = gerar_ranges_cep(df_oficial_ia, dict_limites=limites_expandidos, is_regional=is_regional)
@@ -1644,7 +1701,7 @@ with aba3:
                 st.download_button(
                     label="📊 Baixar Relatório Completo (Análise Completa.xlsx)",
                     data=exportar_excel_formatado(dict_completo),
-                    file_name=f"Analise_Completa_{limpa_texto(cidade_selecionada)}.xlsx",
+                    file_name=f"Analise_Completa_{limpa_texto(cidades_selecionadas[0]) if cidades_selecionadas else 'Global'}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )

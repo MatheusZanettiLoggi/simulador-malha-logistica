@@ -255,12 +255,12 @@ def buscar_coordenadas(endereco_busca):
     return None
 
 @st.cache_data(show_spinner=False)
-def geocode_fallback_single(bairro, cidade, uf):
-    """Busca coordenada específica do Bairro primeiro, depois cai para o Município genérico."""
-    res = buscar_coordenadas(f"{bairro}, {cidade}, {uf}, Brasil")
+def get_city_coords(cidade, uf):
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
     if res: return res
-    res = buscar_coordenadas(f"{cidade}, {uf}, Brasil")
-    return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
 
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
@@ -908,8 +908,9 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
+        todas_bases_projeto = transp_ativas
         
-        for base in todas_transp_globais:
+        for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
             st.markdown(f"**{base}**")
             is_ignored = st.checkbox("❌ Removida (Missorting)", value=(base in st.session_state.bases_ignoradas), key=f"ignorar_edit_{base}")
@@ -926,7 +927,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     st.caption("∞ (Ilimitado)")
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in todas_transp_globais if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -957,15 +958,15 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-
+# Algoritmo de Fallback por Satélite para Municípios Faltantes (Otimizado)
 @st.cache_data(show_spinner=False)
-def geocode_fallback_single(bairro, cidade, uf):
-    """Busca coordenada específica do Bairro primeiro, depois cai para o Município genérico."""
-    res = buscar_coordenadas(f"{bairro}, {cidade}, {uf}, Brasil")
+def get_city_coords(cidade, uf):
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
     if res: return res
-    res = buscar_coordenadas(f"{cidade}, {uf}, Brasil")
-    return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
 
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
 def extrair_pontos_bairros(gdf_cidade_local):
     dict_pontos = {}
     for _, row in gdf_cidade_local.iterrows():
@@ -975,6 +976,7 @@ def extrair_pontos_bairros(gdf_cidade_local):
             pts = []
             minx, miny, maxx, maxy = geom.bounds
             
+            # Semente fixa para que os bairros não mudem de posição a cada F5
             h_bairro = int(hashlib.md5(b_id.encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_bairro % (2**32 - 1))
             
@@ -983,6 +985,7 @@ def extrair_pontos_bairros(gdf_cidade_local):
                 rx = rng.uniform(minx, maxx)
                 ry = rng.uniform(miny, maxy)
                 pnt = Point(rx, ry)
+                # Verifica rigorosamente se o ponto não caiu no mar ou bairro vizinho
                 if geom.contains(pnt):
                     pts.append((ry, rx))
                 attempts += 1
@@ -994,8 +997,10 @@ def extrair_pontos_bairros(gdf_cidade_local):
             dict_pontos[b_id] = pts
     return dict_pontos
 
+# Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
+# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
 def extrair_centroides_ia(gdf_cidade_local):
     dict_centroids = {}
     for _, row in gdf_cidade_local.iterrows():
@@ -1097,6 +1102,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
         
+        # Recupera as posições do cep e cria o fallback geográfico para polígonos faltantes
         if chave_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1107,13 +1113,14 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
-            coord_cidade = dict_fallback.get(chave_id)
+            coord_cidade = dict_fallback.get(cidade_nome)
             if coord_cidade:
                 lat_cid, lon_cid = coord_cidade
                 h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
                 rng = np.random.RandomState(h_cep % (2**32 - 1))
-                lat_center = lat_cid + rng.normal(0, 0.012)
-                lon_center = lon_cid + rng.normal(0, 0.012)
+                # Espalhamento um pouco maior (aprox 1.5km a 2km) para cobrir o centro da cidade
+                lat_center = lat_cid + rng.normal(0, 0.015)
+                lon_center = lon_cid + rng.normal(0, 0.015)
             else:
                 lat_center, lon_center = cy, cx
             
@@ -1142,6 +1149,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
                 lon_pino = lon_center + offset_r * np.sin(angle)
                 markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
+    # Utiliza MacroElement para injetar o JS em background nativo sem travar o processador Python
     FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:
@@ -1243,21 +1251,21 @@ with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
-# Sistema Batched de Geocoding (Roda uma única vez antes de exibir o mapa para manter a velocidade)
+# Sistema Batched de Geocoding (Roda uma única vez por CIDADE ausente, MUITO mais rápido)
 dict_fallback_coords = {}
-missing_set = set()
+missing_cities = set()
 
 for df_p in [df_pontos_orig, df_pontos_sim]:
     for _, row in df_p.iterrows():
         chave = row['Chave_Local']
         if chave not in dict_bairros_pontos_espalhados and chave not in dict_bairros_centroides:
-            missing_set.add((chave, row['Bairro'], row['Cidade']))
+            missing_cities.add(row['Cidade'])
 
-if missing_set:
-    with st.spinner("🛰️ Satélite mapeando bairros sem polígono... (Isso ocorre apenas uma vez)"):
-        for chave, bairro, cidade in missing_set:
-            coord = geocode_fallback_single(bairro, cidade, uf_automatica)
-            dict_fallback_coords[chave] = coord
+if missing_cities:
+    with st.spinner(f"🛰️ Satélite localizando o centro de {len(missing_cities)} município(s) sem polígono... (Isso ocorre apenas uma vez)"):
+        for cid in missing_cities:
+            coord = get_city_coords(cid, uf_automatica)
+            dict_fallback_coords[cid] = coord
 
 # Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite
 if not gdf_cidade.empty:

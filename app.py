@@ -256,7 +256,6 @@ def buscar_coordenadas(endereco_busca):
 
 @st.cache_data
 def get_city_coords(cidade, uf):
-    """Busca as coordenadas de uma cidade quando o IBGE não possui o polígono do município."""
     query = f"{cidade}, {uf}, Brasil"
     res = buscar_coordenadas(query)
     if res: return res
@@ -317,7 +316,6 @@ def otimizar_base_global(df_raw, de_para_dict):
     modes = df.groupby('Join_Bairro')['Bairro'].agg(lambda x: x.mode()[0] if not x.empty else x.iloc[0]).to_dict()
     df['Bairro'] = df['Join_Bairro'].map(modes)
     
-    # Criar chave única combinando Cidade e Bairro para evitar colisão de nomes
     df['Chave_Local'] = df['Join_Cidade'] + "_" + df['Join_Bairro']
     
     return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Chave_Local', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
@@ -365,6 +363,7 @@ def load_dados(excel_file, zip_file, modo):
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
+        
         gdf['Join_Cidade'] = gdf['NM_MUN'].apply(limpa_texto) if 'NM_MUN' in gdf.columns else ""
         gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
@@ -381,12 +380,10 @@ def load_dados(excel_file, zip_file, modo):
         
     df_vol['Cabeca_CEP'] = df_vol[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5]
     
-    # Criar chave única para o GDF também
     gdf['Chave_Local'] = gdf['Join_Cidade'] + "_" + gdf['Join_Bairro']
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -395,7 +392,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
     df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
     
-    # A chave para cruzamento precisa envolver Cidade e Bairro para evitar sobrescrever nomes repetidos
     if is_regional:
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo']
@@ -403,11 +399,9 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto) + "_" + df_ref_safe['Bairro'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo'] + "_" + df_res['bairro_limpo']
     
-    # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
     map_bairro = df_ref_safe.groupby('Chave_Match')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
     df_res['Transportadora'] = df_res['Chave_Match'].map(map_bairro)
     
-    # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação)
     df_ref_safe['Chave_Cabeca'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['Cabeca_CEP']
     map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
     
@@ -416,7 +410,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     if mask_cab.any():
         df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
         
-    # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
     df_ref_safe['Chave_CEP'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['CEP_Limpo']
     map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
     
@@ -1006,7 +999,7 @@ def extrair_pontos_bairros(gdf_cidade_local):
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
-# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback
+# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
 def extrair_centroides_ia(gdf_cidade_local):
     dict_centroids = {}
     for _, row in gdf_cidade_local.iterrows():
@@ -1108,7 +1101,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, pinos_base
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
         
-        # Recupera as posições do cep e cria o fallback geográfico para polígonos faltantes
         if chave_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1154,24 +1146,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, pinos_base
                 lon_pino = lon_center + offset_r * np.sin(angle)
                 markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
-    map_id = m.get_name()
-    js_code = f"""
-    var markers = {json.dumps(markers_data)};
-    for (var i=0; i<markers.length; i++) {{
-        var data = markers[i];
-        var circle = L.circleMarker([data[0], data[1]], {{
-            radius: data[3],
-            color: 'white',
-            weight: 0.5,
-            fill: true,
-            fillColor: data[2],
-            fillOpacity: 0.9
-        }}).addTo({map_id});
-        circle.bindTooltip(data[4]);
-    }}
-    """
-    m.get_root().script.add_child(folium.Element(js_code))
+    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:
         for base, coords in pinos_bases.items():

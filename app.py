@@ -256,7 +256,6 @@ def buscar_coordenadas(endereco_busca):
 
 @st.cache_data(show_spinner=False)
 def get_city_coords(cidade, uf):
-    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
     query = f"{cidade}, {uf}, Brasil"
     res = buscar_coordenadas(query)
     if res: return res
@@ -738,7 +737,7 @@ def deve_pedir_capacidade(nome_base):
     nome_lower = str(nome_base).lower()
     return not (nome_lower.startswith("agf") or nome_lower.startswith("correios") or nome_lower == "regiões sem capacidade")
 
-bases_sem_coord = [b for b in todas_transp_globais if b not in st.session_state.coords_bases and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
+bases_sem_coord = [b for b in todas_transp_globais if b not in st.session_state.coords_bases and b not in st.session_state.bases_ignoradas and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
 if bases_sem_coord or st.session_state.erros_geocoding:
     st.title(f"📍 Configuração de Bases (Global)")
     st.info("Para liberar o dashboard, insira o endereço de todas as bases presentes no arquivo. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação na análise.")
@@ -749,7 +748,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     idx_col = 0
     
     for base in todas_transp_globais:
-        if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
+        if base == TAG_MISSORTING or base == 'Regiões sem capacidade' or base in st.session_state.bases_ignoradas: continue
         with cols[idx_col % 2]:
             st.markdown(f"**🏢 Sede: {base}**")
             if f"input_end_{base}" not in st.session_state:
@@ -908,7 +907,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = transp_ativas
+        todas_bases_projeto = todas_transp_globais
         
         for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
@@ -927,7 +926,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     st.caption("∞ (Ilimitado)")
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -1149,7 +1148,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
                 lon_pino = lon_center + offset_r * np.sin(angle)
                 markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
-    # Utiliza MacroElement para injetar o JS em background nativo sem travar o processador Python
     FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:

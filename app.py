@@ -875,7 +875,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
+        todas_bases_projeto = transp_ativas
         
         for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue

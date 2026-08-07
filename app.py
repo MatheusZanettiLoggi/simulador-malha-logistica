@@ -953,6 +953,14 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
+
 # Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
 def extrair_pontos_bairros(gdf_cidade_local):
     dict_pontos = {}
@@ -1047,13 +1055,6 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
             else:
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
-
-@st.cache_data(show_spinner=False)
-def get_city_coords(cidade, uf):
-    query = f"{cidade}, {uf}, Brasil"
-    res = buscar_coordenadas(query)
-    if res: return res
-    return buscar_coordenadas(f"{cidade}, Brasil")
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False, bairros_ativos=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)

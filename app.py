@@ -254,33 +254,6 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
-@st.cache_data(show_spinner=False)
-def get_city_coords(cidade, uf):
-    cidade_limpa = limpa_texto(cidade)
-    fallback_map = {
-        "GOIANIA": (-16.6869, -49.2648),
-        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
-        "SENADOR CANEDO": (-16.7086, -49.0961),
-        "RIO DE JANEIRO": (-22.9068, -43.1729),
-        "TERESOPOLIS": (-22.4122, -42.9653),
-        "BARRA DO PIRAI": (-22.4711, -43.8247),
-        "NOVA FRIBURGO": (-22.2819, -42.5311),
-        "BRASILIA": (-15.7801, -47.9292),
-        "FORTALEZA": (-3.7172, -38.5433),
-        "SALVADOR": (-12.9714, -38.5014),
-        "LAURO DE FREITAS": (-12.8944, -38.3272),
-        "CAMACARI": (-12.6975, -38.3241),
-        "SIMOES FILHO": (-12.7844, -38.4044),
-        "SAO PAULO": (-23.5505, -46.6333)
-    }
-    if cidade_limpa in fallback_map:
-        return fallback_map[cidade_limpa]
-        
-    query = f"{cidade}, {uf}, Brasil"
-    res = buscar_coordenadas(query)
-    if res: return res
-    return buscar_coordenadas(f"{cidade}, Brasil")
-
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -345,9 +318,9 @@ def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
     qtd_dias = 30
-    if 'Package Register Data de Entrega Date' in df.columns:
+    if 'Package Register Data de Promessa Date' in df.columns:
         try:
-            dias_unicos = pd.to_datetime(df['Package Register Data de Entrega Date']).dt.date.dropna().nunique()
+            dias_unicos = pd.to_datetime(df['Package Register Data de Promessa Date']).dt.date.dropna().nunique()
             if dias_unicos > 0:
                 qtd_dias = dias_unicos
         except:
@@ -404,6 +377,7 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
+# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -904,13 +878,11 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
-    
-    if not gdf_cidade.empty:
-        folium.GeoJson(
-            gdf_cidade, 
-            style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
-            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
-        ).add_to(m_helper)
+    folium.GeoJson(
+        gdf_cidade, 
+        style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
+        tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
+    ).add_to(m_helper)
     
     if not gdf_foco.empty:
         folium.GeoJson(
@@ -982,10 +954,57 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
-def extrair_pontos_bairros(gdf_cidade_local):
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974)
+    }
+    return uf_coords.get(uf, (-16.6869, -49.2648))
+
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro ou cidade)
+def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
-    for _, row in gdf_cidade_local.iterrows():
+    
+    # Prepara um dicionário com os limites de toda a cidade para bairros não mapeados
+    city_bounds = {}
+    for cid in _gdf_cidade['Join_Cidade'].unique():
+        gdf_mun = _gdf_cidade[_gdf_cidade['Join_Cidade'] == cid]
+        if not gdf_mun.empty:
+            geom_mun = gdf_mun.unary_union
+            if pd.notnull(geom_mun):
+                city_bounds[cid] = (geom_mun.bounds, geom_mun)
+
+    for _, row in _gdf_cidade.iterrows():
         geom = row['geometry']
         if pd.notnull(geom):
             b_id = row['Chave_Local']
@@ -1011,15 +1030,40 @@ def extrair_pontos_bairros(gdf_cidade_local):
                 pts.append((rep.y, rep.x))
                 
             dict_pontos[b_id] = pts
+            
+    # Garantir que todas as chaves (mesmo as sem polígono de bairro) tenham pontos baseados na cidade
+    todas_chaves_planilha = df_cidade_orig['Chave_Local'].unique()
+    for chave in todas_chaves_planilha:
+        if chave not in dict_pontos:
+            cidade_alvo = chave.split('_')[0] if '_' in chave else chave
+            if cidade_alvo in city_bounds:
+                bounds, geom_mun = city_bounds[cidade_alvo]
+                minx, miny, maxx, maxy = bounds
+                pts = []
+                h_chave = int(hashlib.md5(chave.encode()).hexdigest(), 16)
+                rng = np.random.RandomState(h_chave % (2**32 - 1))
+                attempts = 0
+                while len(pts) < 60 and attempts < 2000:
+                    rx = rng.uniform(minx, maxx)
+                    ry = rng.uniform(miny, maxy)
+                    pnt = Point(rx, ry)
+                    if geom_mun.contains(pnt):
+                        pts.append((ry, rx))
+                    attempts += 1
+                if not pts:
+                    rep = geom_mun.representative_point()
+                    pts.append((rep.y, rep.x))
+                dict_pontos[chave] = pts
+
     return dict_pontos
 
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
 # Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
-def extrair_centroides_ia(gdf_cidade_local):
+def extrair_centroides_ia(_gdf_cidade):
     dict_centroids = {}
-    for _, row in gdf_cidade_local.iterrows():
+    for _, row in _gdf_cidade.iterrows():
         if pd.notnull(row['geometry']):
             dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
     return dict_centroids
@@ -1869,7 +1913,6 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
-
 
 # ---------------------------------------------------------
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)

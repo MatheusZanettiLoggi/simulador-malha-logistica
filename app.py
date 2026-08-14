@@ -254,43 +254,6 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
-@st.cache_data(show_spinner=False)
-def get_city_coords(cidade, uf):
-    cidade_limpa = limpa_texto(cidade)
-    fallback_map = {
-        "GOIANIA": (-16.6869, -49.2648),
-        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
-        "SENADOR CANEDO": (-16.7086, -49.0961),
-        "RIO DE JANEIRO": (-22.9068, -43.1729),
-        "TERESOPOLIS": (-22.4122, -42.9653),
-        "BARRA DO PIRAI": (-22.4711, -43.8247),
-        "NOVA FRIBURGO": (-22.2819, -42.5311),
-        "BRASILIA": (-15.7801, -47.9292),
-        "FORTALEZA": (-3.7172, -38.5433),
-        "SALVADOR": (-12.9714, -38.5014),
-        "LAURO DE FREITAS": (-12.8944, -38.3272),
-        "CAMACARI": (-12.6975, -38.3241),
-        "SIMOES FILHO": (-12.7844, -38.4044),
-        "SAO PAULO": (-23.5505, -46.6333)
-    }
-    if cidade_limpa in fallback_map:
-        return fallback_map[cidade_limpa]
-        
-    query = f"{cidade}, {uf}, Brasil"
-    res = buscar_coordenadas(query)
-    if res: return res
-    res = buscar_coordenadas(f"{cidade}, Brasil")
-    if res: return res
-    
-    uf_coords = {
-        "GO": (-16.6869, -49.2648),
-        "RJ": (-22.9068, -43.1729),
-        "SP": (-23.5505, -46.6333),
-        "DF": (-15.7801, -47.9292),
-        "MT": (-15.6014, -56.0974)
-    }
-    return uf_coords.get(uf, (-16.6869, -49.2648))
-
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -357,7 +320,7 @@ def load_dados(excel_file, zip_file, modo):
     qtd_dias = 30
     if 'Package Register Data de Promessa Date' in df.columns:
         try:
-            dias_unicos = pd.to_datetime(df['Package Promised Date']).dt.date.dropna().nunique()
+            dias_unicos = pd.to_datetime(df['Package Register Data de Promessa Date']).dt.date.dropna().nunique()
             if dias_unicos > 0:
                 qtd_dias = dias_unicos
         except:
@@ -414,7 +377,6 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -510,6 +472,9 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
                     
                     st.session_state.cidades_selecionadas_backup = saved_state.get('cidades_selecionadas_backup', [])
+                    if 'cidade_selecionada_backup' in saved_state and not st.session_state.cidades_selecionadas_backup:
+                        st.session_state.cidades_selecionadas_backup = [saved_state['cidade_selecionada_backup']]
+                        
                     st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
                     st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
@@ -686,25 +651,39 @@ else:
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
-# Recorte Geométrico
+# Recorte Geométrico usando a Chave Robusta
 cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
 bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
 gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa) & gdf['Join_Bairro'].isin(bairros_mapa)]
 
-bairros_planilha = set(df_cidade_orig['Join_Bairro'])
-bairros_ibge = set(gdf_cidade['Join_Bairro'])
+bairros_planilha = set(df_cidade_orig['Chave_Local'])
+bairros_ibge = set(gdf_cidade['Chave_Local'])
 divergentes = bairros_planilha - bairros_ibge
+
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)"):
-        bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Join_Bairro'].isin(divergentes)]['Bairro'].unique()
-        bairros_ibge_vazios = gdf_cidade[~gdf_cidade['Join_Bairro'].isin(bairros_planilha)]['NM_BAIRRO_STR'].unique()
-        bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + sorted(bairros_ibge_vazios))
+        bairros_planilha_vazios = df_cidade_orig[df_cidade_orig['Chave_Local'].isin(divergentes)]['Bairro'].unique()
+        
+        bairros_ibge_raw = gdf_cidade[~gdf_cidade['Chave_Local'].isin(bairros_planilha)]
+        opcoes_ibge = []
+        for _, row_i in bairros_ibge_raw.iterrows():
+            nm_b = row_i.get('NM_BAIRRO_STR', 'Desconhecido')
+            nm_m = row_i.get('NM_MUN', '')
+            if nm_m:
+                opcoes_ibge.append(f"{nm_b} ({nm_m})")
+            else:
+                opcoes_ibge.append(nm_b)
+                
+        opcoes_ibge = sorted(list(set(opcoes_ibge)))
+        
+        bairro_ibge_selecionado = st.selectbox("1. Local no Mapa (IBGE):", ["-- Nenhum --"] + opcoes_ibge)
         if bairro_ibge_selecionado != "-- Nenhum --":
-            sugestoes = difflib.get_close_matches(bairro_ibge_selecionado, bairros_planilha_vazios, n=5, cutoff=0.3)
+            nome_ibge_limpo = re.sub(r'\s*\([^)]*\)$', '', bairro_ibge_selecionado).strip()
+            sugestoes = difflib.get_close_matches(nome_ibge_limpo, bairros_planilha_vazios, n=5, cutoff=0.3)
             bairro_planilha_selecionado = st.selectbox("2. Local na Planilha:", ["-- Selecione --"] + sugestoes + sorted([b for b in bairros_planilha_vazios if b not in sugestoes]))
             if st.button("Vincular", type="primary"):
                 if bairro_planilha_selecionado != "-- Selecione --":
-                    st.session_state.de_para_bairros[bairro_planilha_selecionado] = bairro_ibge_selecionado
+                    st.session_state.de_para_bairros[bairro_planilha_selecionado] = nome_ibge_limpo
                     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
                         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
                     st.rerun()
@@ -974,7 +953,15 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
+
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro ou cidade)
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     
@@ -1327,7 +1314,7 @@ if missing_cities:
             coord = get_city_coords(cid, uf_automatica)
             dict_fallback_coords[cid] = coord
 
-# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite
+# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite / Estado
 if not gdf_cidade.empty:
     cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
 else:
@@ -1901,12 +1888,12 @@ with aba3:
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
-with st.sidebar.expander("⏱️ Diagnóstico de Performance", expanded=False):
-    st.write("Baixe o arquivo abaixo e envie para a avaliação do gargalo de processamento.")
-    log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
-    st.download_button(
-        label="📥 Baixar log_performance.json",
-        data=log_json,
-        file_name="log_performance.json",
-        mime="application/json"
-    )
+st.sidebar.markdown("### ⏱️ Diagnóstico de Performance")
+st.sidebar.write("Baixe o arquivo para avaliar os gargalos de processamento.")
+log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
+st.sidebar.download_button(
+    label="📥 Baixar log_performance.json",
+    data=log_json,
+    file_name="log_performance.json",
+    mime="application/json"
+)

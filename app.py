@@ -254,6 +254,33 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -377,7 +404,6 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -386,7 +412,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
     df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
     
-    # A chave para cruzamento precisa envolver Cidade e Bairro para evitar sobrescrever nomes repetidos
     if is_regional:
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo']
@@ -394,11 +419,9 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto) + "_" + df_ref_safe['Bairro'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo'] + "_" + df_res['bairro_limpo']
     
-    # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
     map_bairro = df_ref_safe.groupby('Chave_Match')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
     df_res['Transportadora'] = df_res['Chave_Match'].map(map_bairro)
     
-    # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação)
     df_ref_safe['Chave_Cabeca'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['Cabeca_CEP']
     map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
     
@@ -407,7 +430,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     if mask_cab.any():
         df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
         
-    # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
     df_ref_safe['Chave_CEP'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['CEP_Limpo']
     map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
     
@@ -882,11 +904,13 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
-    folium.GeoJson(
-        gdf_cidade, 
-        style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
-        tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
-    ).add_to(m_helper)
+    
+    if not gdf_cidade.empty:
+        folium.GeoJson(
+            gdf_cidade, 
+            style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
+            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
+        ).add_to(m_helper)
     
     if not gdf_foco.empty:
         folium.GeoJson(
@@ -1246,7 +1270,7 @@ with col_btn:
         
     zip_data = buf.getvalue()
 
-    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0])}.zip" if cidades_selecionadas else "Backup_Malha_Completa.zip"
+    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0]) if cidades_selecionadas else 'Completa'}.zip"
 
     st.download_button(
         label="💾 Salvar Estado da Análise",
@@ -1290,7 +1314,9 @@ else:
             "GO": (-16.6869, -49.2648),
             "RJ": (-22.9068, -43.1729),
             "SP": (-23.5505, -46.6333),
-            "DF": (-15.7801, -47.9292)
+            "DF": (-15.7801, -47.9292),
+            "CE": (-3.7172, -38.5433),
+            "BA": (-12.9714, -38.5014)
         }
         cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
 
@@ -1843,6 +1869,7 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+
 
 # ---------------------------------------------------------
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)

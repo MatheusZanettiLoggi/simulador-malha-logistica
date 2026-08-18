@@ -305,6 +305,7 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df['Bairro'] = df['Bairro'].apply(lambda x: de_para_dict.get(x, x))
     df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
     
+    # Padroniza nomes com o IBGE
     def format_bairro(row):
         jb = row['Join_Bairro']
         if jb in ibge_name_map:
@@ -324,21 +325,52 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
 def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
+    # -------------------------------------------------------------
+    # INTELIGÊNCIA DINÂMICA DE COLUNAS (Evita KeyError)
+    # Detecta automaticamente qual é a versão do Looker carregada
+    # -------------------------------------------------------------
+    col_data = 'Package Register Data de Promessa Date' if 'Package Register Data de Promessa Date' in df.columns else 'Package Promised Date'
+    col_cep = 'Package Register CEP de Entrega' if 'Package Register CEP de Entrega' in df.columns else ('Package ZIP' if 'Package ZIP' in df.columns else COLUNA_CEP)
+    
+    if 'Territorial Scope Neighborhood' in df.columns:
+        col_bairro = 'Territorial Scope Neighborhood'
+    elif 'Package Register Bairro de Entrega' in df.columns:
+        col_bairro = 'Package Register Bairro de Entrega'
+    else:
+        col_bairro = 'Package Destination Neighborhood'
+
+    if 'Package Register Cidade de Entrega (Correios)' in df.columns:
+        col_cidade = 'Package Register Cidade de Entrega (Correios)'
+    else:
+        col_cidade = 'Package Destination City'
+
+    if 'Package Register Last Mile Company Name' in df.columns:
+        col_company = 'Package Register Last Mile Company Name'
+    else:
+        col_company = 'Package Last Mile Company Name'
+
+    if 'Package Register Routing Code De Entrega' in df.columns:
+        col_routing = 'Package Register Routing Code De Entrega'
+    else:
+        col_routing = 'Package Planned DC Routing Code'
+
+    if 'Package Register # Pacotes' in df.columns:
+        col_vol = 'Package Register # Pacotes'
+    else:
+        col_vol = 'Package # Packages'
+    
     qtd_dias = 30
-    if 'Package Register Data de Promessa Date' in df.columns:
+    if col_data in df.columns:
         try:
-            dias_unicos = pd.to_datetime(df['Package Register Data de Promessa Date']).dt.date.dropna().nunique()
+            dias_unicos = pd.to_datetime(df[col_data]).dt.date.dropna().nunique()
             if dias_unicos > 0:
                 qtd_dias = dias_unicos
         except:
             pass
             
-    if COLUNA_CEP not in df.columns:
-        df[COLUNA_CEP] = '00000-000'
+    if col_cep not in df.columns:
+        df[col_cep] = '00000-000'
         
-    col_company = 'Package Register Last Mile Company Name'
-    col_routing = 'Package Register Routing Code De Entrega'
-    
     if col_company in df.columns:
         df = df[df[col_company].notna()]
         df = df[~df[col_company].astype(str).str.lower().isin(['nan', 'null', 'none', ''])]
@@ -359,7 +391,8 @@ def load_dados(excel_file, zip_file, modo):
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     if modo == "🏙️ Intra-Município (Por Bairros)":
-        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Territorial Scope Neighborhood', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
+        df_vol = df.groupby([col_cidade, col_bairro, col_company, col_cep])[col_vol].sum().reset_index()
+        # Garante o mapeamento exato para a variável global COLUNA_CEP
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
@@ -368,7 +401,7 @@ def load_dados(excel_file, zip_file, modo):
         gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
     else:
-        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
+        df_vol = df.groupby([col_cidade, col_company, col_cep])[col_vol].sum().reset_index()
         df_vol.insert(0, 'Macro_Regiao', 'Visão Regional (Estado Completo)')
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
@@ -668,25 +701,6 @@ gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa)]
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
 bairros_ibge = set(gdf_cidade['Chave_Local'])
-divergentes = bairros_planilha - bairros_ibge
-
-# Auto-correção leve (Fuzzy Match >= 90%)
-houve_auto_fix = False
-for div in list(divergentes):
-    cidade_div, bairro_div = div.split('_', 1) if '_' in div else ("", div)
-    opcoes_bairros_cidade = [b.split('_', 1)[1] for b in bairros_ibge if b.startswith(cidade_div + '_')]
-    sugestao = difflib.get_close_matches(bairro_div, opcoes_bairros_cidade, n=1, cutoff=0.90)
-    if sugestao:
-        nomes_originais = df_cidade_orig[df_cidade_orig['Chave_Local'] == div]['Bairro'].unique()
-        for n_orig in nomes_originais:
-            st.session_state.de_para_bairros[n_orig] = sugestao[0]
-        houve_auto_fix = True
-        
-if houve_auto_fix:
-    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
-        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
-    st.rerun()
-
 divergentes = bairros_planilha - bairros_ibge
 
 if divergentes:
@@ -1101,17 +1115,16 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False, bairros_ativos=None):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
-    if not gdf_mapa.empty:
-        folium.GeoJson(
-            gdf_mapa,
-            style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
-        ).add_to(m)
+    folium.GeoJson(
+        gdf_mapa,
+        style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
+    ).add_to(m)
     
-    bairros_selec_safe = bairros_ativos if bairros_ativos else []
+    bairros_selec_safe = globals().get('bairros_selecionados', [])
     
     cols = list(df_pontos.columns)
     idx_chave_local = cols.index('Chave_Local')
@@ -1314,6 +1327,22 @@ with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
+# Sistema Batched de Geocoding (Roda uma única vez por CIDADE ausente, MUITO mais rápido)
+dict_fallback_coords = {}
+missing_cities = set()
+
+for df_p in [df_pontos_orig, df_pontos_sim]:
+    for _, row in df_p.iterrows():
+        chave = row['Chave_Local']
+        if chave not in dict_bairros_pontos_espalhados and chave not in dict_bairros_centroides:
+            missing_cities.add(row['Cidade'])
+
+if missing_cities:
+    with st.spinner(f"🛰️ Satélite localizando o centro de {len(missing_cities)} município(s) sem polígono... (Isso ocorre apenas uma vez)"):
+        for cid in missing_cities:
+            coord = get_city_coords(cid, uf_automatica)
+            dict_fallback_coords[cid] = coord
+
 # Ajuste da centralização do mapa priorizando o Polígono
 if not gdf_cidade.empty:
     cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
@@ -1342,7 +1371,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1464,7 +1493,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1686,7 +1715,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1724,7 +1753,7 @@ with aba2:
                     if vol_nao_plotado_ia > 0:
                         st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_ia:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
                     elif vol_aprox_ia == 0 and vol_nao_plotado_ia == 0:
-                        st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso no mapa.")
+                        st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso.")
 
             st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("📊 Ver Tabelas de Volumetria (Cenário IA)", expanded=False):
@@ -1823,6 +1852,8 @@ with aba3:
                 df_ref_safe = df_referencia.copy()
                 
                 df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+                df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
+                
                 df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
                 df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
                 

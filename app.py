@@ -254,6 +254,45 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974),
+        "BA": (-12.9714, -38.5014),
+        "CE": (-3.7172, -38.5433)
+    }
+    return uf_coords.get(uf, (-15.7801, -47.9292))
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -377,7 +416,7 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
+# Função de Cruzamento e Mapeamento Robusto dos Correios
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -473,6 +512,9 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
                     
                     st.session_state.cidades_selecionadas_backup = saved_state.get('cidades_selecionadas_backup', [])
+                    if 'cidade_selecionada_backup' in saved_state and not st.session_state.cidades_selecionadas_backup:
+                        st.session_state.cidades_selecionadas_backup = [saved_state['cidade_selecionada_backup']]
+                        
                     st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
                     st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
@@ -649,7 +691,7 @@ else:
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
-# Recorte Geométrico usando a Chave Robusta
+# Recorte Geométrico
 cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
 bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
 gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa) & gdf['Join_Bairro'].isin(bairros_mapa)]
@@ -792,7 +834,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     submit_enderecos = st.button("Localizar Bases e Iniciar Simulador 🚀", type="primary", use_container_width=True)
         
     if submit_enderecos:
-        with st.spinner("Analisando coordenadas e atualizando capacidades..."):
+        with st.spinner("Analisando coordenadas e atualizando capacities..."):
             erros = []
             for base in novos_enderecos:
                 st.session_state.capacidades_bases[base] = novas_capacidades[base]
@@ -1087,6 +1129,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
         
+        # Recupera as posições do cep e cria o fallback geográfico para polígonos faltantes
         if chave_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1097,10 +1140,15 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            rng = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = cy + rng.normal(0, 0.015)
-            lon_center = cx + rng.normal(0, 0.015)
+            coord_cidade = dict_fallback.get(cidade_nome)
+            if coord_cidade:
+                lat_cid, lon_cid = coord_cidade
+                h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+                rng = np.random.RandomState(h_cep % (2**32 - 1))
+                lat_center = lat_cid + rng.normal(0, 0.015)
+                lon_center = lon_cid + rng.normal(0, 0.015)
+            else:
+                lat_center, lon_center = cy, cx
             
         qtd_real = len(rows)
         qtd_bases = row_ref[idx_qtd_bases]
@@ -1122,13 +1170,31 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
+                # Substitui o círculo geométrico por um espalhamento orgânico (jitter natural)
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.00025)
                 lon_pino = lon_center + rng_pino.normal(0, 0.00025)
                 markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
-    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
+    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
+    map_id = m.get_name()
+    js_code = f"""
+    var markers = {json.dumps(markers_data)};
+    for (var i=0; i<markers.length; i++) {{
+        var data = markers[i];
+        var circle = L.circleMarker([data[0], data[1]], {{
+            radius: data[3],
+            color: 'white',
+            weight: 0.5,
+            fill: true,
+            fillColor: data[2],
+            fillOpacity: 0.9
+        }}).addTo({map_id});
+        circle.bindTooltip(data[4]);
+    }}
+    """
+    m.get_root().script.add_child(folium.Element(js_code))
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1245,7 +1311,7 @@ if missing_cities:
             coord = get_city_coords(cid, uf_automatica)
             dict_fallback_coords[cid] = coord
 
-# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite
+# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite / Estado
 if not gdf_cidade.empty:
     cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
 else:

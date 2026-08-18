@@ -85,7 +85,7 @@ class FastCircleMarkers(MacroElement):
 
 # ---------------------------------------------------------
 
-COLUNA_CEP = 'Package ZIP'
+COLUNA_CEP = 'Package Register CEP de Entrega'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
 TAG_MISSORTING = 'Remover da análise - Missorting'
 
@@ -254,6 +254,43 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974)
+    }
+    return uf_coords.get(uf, (-16.6869, -49.2648))
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -318,9 +355,9 @@ def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
     qtd_dias = 30
-    if 'Package Promised Date' in df.columns:
+    if 'Package Register Data de Promessa Date' in df.columns:
         try:
-            dias_unicos = pd.to_datetime(df['Package Promised Date']).dt.date.dropna().nunique()
+            dias_unicos = pd.to_datetime(df['Package Register Data de Promessa Date']).dt.date.dropna().nunique()
             if dias_unicos > 0:
                 qtd_dias = dias_unicos
         except:
@@ -329,8 +366,8 @@ def load_dados(excel_file, zip_file, modo):
     if COLUNA_CEP not in df.columns:
         df[COLUNA_CEP] = '00000-000'
         
-    col_company = 'Package Last Mile Company Name'
-    col_routing = 'Package Planned DC Routing Code'
+    col_company = 'Package Register Last Mile Company Name'
+    col_routing = 'Package Register Routing Code De Entrega'
     
     if col_company in df.columns:
         df = df[df[col_company].notna()]
@@ -352,7 +389,7 @@ def load_dados(excel_file, zip_file, modo):
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     if modo == "🏙️ Intra-Município (Por Bairros)":
-        df_vol = df.groupby(['Package Destination City', 'Package Destination Neighborhood', 'Package Last Mile Company Name', COLUNA_CEP])['Package # Packages'].sum().reset_index()
+        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Package Register Bairro de Entrega', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
@@ -361,7 +398,7 @@ def load_dados(excel_file, zip_file, modo):
         gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
         gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
     else:
-        df_vol = df.groupby(['Package Destination City', 'Package Last Mile Company Name', COLUNA_CEP])['Package # Packages'].sum().reset_index()
+        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
         df_vol.insert(0, 'Macro_Regiao', 'Visão Regional (Estado Completo)')
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
@@ -377,6 +414,7 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
+# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -512,7 +550,7 @@ else:
 
     st.sidebar.markdown("**1. Planilha de Volumetria**")
     st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
-    st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26291)")
+    st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
     arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
 
     st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
@@ -953,10 +991,57 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
-def extrair_pontos_bairros(gdf_cidade_local):
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974)
+    }
+    return uf_coords.get(uf, (-16.6869, -49.2648))
+
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro ou cidade)
+def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
-    for _, row in gdf_cidade_local.iterrows():
+    
+    # Prepara um dicionário com os limites de toda a cidade para bairros não mapeados
+    city_bounds = {}
+    for cid in _gdf_cidade['Join_Cidade'].unique():
+        gdf_mun = _gdf_cidade[_gdf_cidade['Join_Cidade'] == cid]
+        if not gdf_mun.empty:
+            geom_mun = gdf_mun.unary_union
+            if pd.notnull(geom_mun):
+                city_bounds[cid] = (geom_mun.bounds, geom_mun)
+
+    for _, row in _gdf_cidade.iterrows():
         geom = row['geometry']
         if pd.notnull(geom):
             b_id = row['Chave_Local']
@@ -982,6 +1067,31 @@ def extrair_pontos_bairros(gdf_cidade_local):
                 pts.append((rep.y, rep.x))
                 
             dict_pontos[b_id] = pts
+            
+    # Garantir que todas as chaves (mesmo as sem polígono de bairro) tenham pontos baseados na cidade
+    todas_chaves_planilha = df_cidade_orig['Chave_Local'].unique()
+    for chave in todas_chaves_planilha:
+        if chave not in dict_pontos:
+            cidade_alvo = chave.split('_')[0] if '_' in chave else chave
+            if cidade_alvo in city_bounds:
+                bounds, geom_mun = city_bounds[cidade_alvo]
+                minx, miny, maxx, maxy = bounds
+                pts = []
+                h_chave = int(hashlib.md5(chave.encode()).hexdigest(), 16)
+                rng = np.random.RandomState(h_chave % (2**32 - 1))
+                attempts = 0
+                while len(pts) < 60 and attempts < 2000:
+                    rx = rng.uniform(minx, maxx)
+                    ry = rng.uniform(miny, maxy)
+                    pnt = Point(rx, ry)
+                    if geom_mun.contains(pnt):
+                        pts.append((ry, rx))
+                    attempts += 1
+                if not pts:
+                    rep = geom_mun.representative_point()
+                    pts.append((rep.y, rep.x))
+                dict_pontos[chave] = pts
+
     return dict_pontos
 
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
@@ -1052,10 +1162,11 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
-    folium.GeoJson(
-        gdf_mapa,
-        style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
-    ).add_to(m)
+    if not gdf_mapa.empty:
+        folium.GeoJson(
+            gdf_mapa,
+            style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
+        ).add_to(m)
     
     bairros_selec_safe = bairros_ativos if bairros_ativos else []
     
@@ -1101,11 +1212,12 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
             coord_cidade = dict_fallback.get(cidade_nome)
+            if not coord_cidade:
+                coord_cidade = get_city_coords(cidade_nome, uf_estado)
             if coord_cidade:
                 lat_cid, lon_cid = coord_cidade
                 h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
                 rng = np.random.RandomState(h_cep % (2**32 - 1))
-                # Espalhamento um pouco maior (aprox 1.5km a 2km) para cobrir o centro da cidade
                 lat_center = lat_cid + rng.normal(0, 0.015)
                 lon_center = lon_cid + rng.normal(0, 0.015)
             else:
@@ -1115,12 +1227,13 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
         qtd_bases = row_ref[idx_qtd_bases]
         parceiros_str = row_ref[idx_parceiros]
         siglas_parceiros = extrair_siglas(parceiros_str)
+        uf_automatica_ponto = descobrir_uf_pelo_cep(cep)
         
         for idx, r_base in enumerate(rows):
             transp = r_base[idx_transp]
             cor = st.session_state.cores_transp.get(transp, '#333333')
             
-            html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Município:</b> {cidade_nome} - {uf_estado}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
+            html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Município:</b> {cidade_nome} - {uf_automatica_ponto}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
             
             if qtd_bases > 1:
                 html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
@@ -1130,11 +1243,12 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                offset_r = 0.0004
-                angle = (idx / qtd_real) * 2 * np.pi
-                lat_pino = lat_center + offset_r * np.cos(angle)
-                lon_pino = lon_center + offset_r * np.sin(angle)
-                markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+                # Substitui o círculo geométrico por um espalhamento orgânico (jitter natural)
+                h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
+                rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
+                lat_pino = lat_center + rng_pino.normal(0, 0.00025)
+                lon_pino = lon_center + rng_pino.normal(0, 0.00025)
+                markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
     # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
     map_id = m.get_name()
@@ -1240,7 +1354,7 @@ with col_btn:
         
     zip_data = buf.getvalue()
 
-    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0])}.zip" if cidades_selecionadas else "Backup_Malha_Completa.zip"
+    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0]) if cidades_selecionadas else 'Completa'}.zip"
 
     st.download_button(
         label="💾 Salvar Estado da Análise",
@@ -1270,7 +1384,7 @@ if missing_cities:
             coord = get_city_coords(cid, uf_automatica)
             dict_fallback_coords[cid] = coord
 
-# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite
+# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite / Estado
 if not gdf_cidade.empty:
     cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
 else:
@@ -1279,7 +1393,16 @@ else:
         cy = np.mean([c[0] for c in valid_coords])
         cx = np.mean([c[1] for c in valid_coords])
     else:
-        cy, cx = -15.7801, -47.9292 
+        # Fallback de centro de acordo com o Estado detectado
+        uf_defaults = {
+            "GO": (-16.6869, -49.2648),
+            "RJ": (-22.9068, -43.1729),
+            "SP": (-23.5505, -46.6333),
+            "DF": (-15.7801, -47.9292),
+            "CE": (-3.7172, -38.5433),
+            "BA": (-12.9714, -38.5014)
+        }
+        cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
 
 zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
@@ -1830,3 +1953,17 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+
+# ---------------------------------------------------------
+# RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)
+# ---------------------------------------------------------
+st.sidebar.markdown("---")
+with st.sidebar.expander("⏱️ Diagnóstico de Performance", expanded=False):
+    st.write("Baixe o arquivo abaixo e envie para a avaliação do gargalo de processamento.")
+    log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
+    st.download_button(
+        label="📥 Baixar log_performance.json",
+        data=log_json,
+        file_name="log_performance.json",
+        mime="application/json"
+    )

@@ -326,7 +326,7 @@ def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
     # -------------------------------------------------------------
-    # INTELIGÊNCIA DINÂMICA DE COLUNAS (Evita KeyError)
+    # INTELIGÊNCIA DINÂMICA DE COLUNAS
     # Detecta automaticamente qual é a versão do Looker carregada
     # -------------------------------------------------------------
     col_data = 'Package Register Data de Promessa Date' if 'Package Register Data de Promessa Date' in df.columns else 'Package Promised Date'
@@ -572,7 +572,6 @@ else:
         st.session_state.loaded_ibge_bytes = arquivo_mapa.getvalue()
         st.session_state.modo_analise = modo_analise
 
-    # Impede que bugs visuais do "rerun" do Streamlit causem tela branca se o arquivo já está na memória
     if st.session_state.get('loaded_excel_bytes') is None or st.session_state.get('loaded_ibge_bytes') is None:
         st.title("🗺️ Simulador de Malha Logística")
         st.info("👈 Por favor, importe os dados na barra lateral à esquerda para iniciar a análise.")
@@ -1119,26 +1118,26 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False, bairros_ativos=None):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
-    if not gdf_mapa.empty:
-        tooltip_layer = None
-        if 'NM_BAIRRO_STR' in gdf_mapa.columns:
-            tooltip_layer = folium.GeoJsonTooltip(
-                fields=['NM_BAIRRO_STR'], 
-                aliases=['Local (IBGE):'], 
-                style="background-color: white; color: #333; font-family: Inter, sans-serif; font-size: 13px; padding: 5px;"
-            )
+    tooltip_layer = None
+    if not gdf_mapa.empty and 'NM_BAIRRO_STR' in gdf_mapa.columns:
+        tooltip_layer = folium.GeoJsonTooltip(
+            fields=['NM_BAIRRO_STR'], 
+            aliases=['Local (IBGE):'], 
+            style="background-color: white; color: #333; font-family: Inter, sans-serif; font-size: 13px; padding: 5px;"
+        )
         
+    if not gdf_mapa.empty:
         folium.GeoJson(
             gdf_mapa,
             style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
             tooltip=tooltip_layer
         ).add_to(m)
     
-    bairros_selec_safe = bairros_ativos if bairros_ativos else []
+    bairros_selec_safe = globals().get('bairros_selecionados', [])
     
     cols = list(df_pontos.columns)
     idx_chave_local = cols.index('Chave_Local')
@@ -1151,25 +1150,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
     idx_qtd_bases = cols.index('Qtd_Bases')
     idx_parceiros = cols.index('Parceiros')
     
-    # -------------------------------------------------------------
-    # Mapeamento de Âncoras por Cabeça de CEP
-    # -------------------------------------------------------------
-    cabeca_to_coords = {}
-    for row in df_pontos.itertuples(index=False):
-        chave = row[idx_chave_local]
-        cab = row[idx_cabeca_cep]
-        if chave in dict_bairros_centroides:
-            if cab not in cabeca_to_coords:
-                cabeca_to_coords[cab] = set()
-            cabeca_to_coords[cab].add(dict_bairros_centroides[chave])
-            
-    dict_cabeca_cep_coords = {}
-    for cab, coords_set in cabeca_to_coords.items():
-        if coords_set:
-            avg_lat = sum(c[0] for c in coords_set) / len(coords_set)
-            avg_lon = sum(c[1] for c in coords_set) / len(coords_set)
-            dict_cabeca_cep_coords[cab] = (avg_lat, avg_lon)
-            
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -1191,32 +1171,13 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
         cidade_nome = row_ref[idx_cidade]
         cabeca_cep_val = row_ref[idx_cabeca_cep]
         
-        # 1. Tenta plotar dentro do Polígono real (se o bairro existir no IBGE)
-        if chave_id in dict_bairros_pontos_espalhados:
-            valid_points = dict_bairros_pontos_espalhados[chave_id]
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            lat_center, lon_center = valid_points[h_cep % len(valid_points)]
-        elif chave_id in dict_bairros_centroides:
-            lat_center, lon_center = dict_bairros_centroides[chave_id]
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
-            lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
-        elif cabeca_cep_val in dict_cabeca_cep_coords:
-            # 2. Bairro não encontrado no IBGE: Fallback Inteligente pela Cabeça de CEP
-            lat_anchor, lon_anchor = dict_cabeca_cep_coords[cabeca_cep_val]
-            
-            h_bairro = int(hashlib.md5(chave_id.encode()).hexdigest(), 16)
-            rng_bairro = np.random.RandomState(h_bairro % (2**32 - 1))
-            lat_anchor += rng_bairro.uniform(-0.002, 0.002)
-            lon_anchor += rng_bairro.uniform(-0.002, 0.002)
-            
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = lat_anchor + rng_cep.normal(0, 0.0010)
-            lon_center = lon_anchor + rng_cep.normal(0, 0.0010)
-        else:
-            # 3. Sem Referência: Pula a plotagem para não jogar pontos errados no mapa
+        # Pula a plotagem de bairros não mapeados (Eles aparecerão na métrica de aviso no painel)
+        if chave_id not in dict_bairros_pontos_espalhados:
             continue
+            
+        valid_points = dict_bairros_pontos_espalhados[chave_id]
+        h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+        lat_center, lon_center = valid_points[h_cep % len(valid_points)]
             
         qtd_real = len(rows)
         qtd_bases = row_ref[idx_qtd_bases]
@@ -1238,31 +1199,13 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                # Substitui as "flores perfeitas" por um agrupamento orgânico muito mais limpo visualmente
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.00025)
                 lon_pino = lon_center + rng_pino.normal(0, 0.00025)
                 markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
-    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
-    map_id = m.get_name()
-    js_code = f"""
-    var markers = {json.dumps(markers_data)};
-    for (var i=0; i<markers.length; i++) {{
-        var data = markers[i];
-        var circle = L.circleMarker([data[0], data[1]], {{
-            radius: data[3],
-            color: 'white',
-            weight: 0.5,
-            fill: true,
-            fillColor: data[2],
-            fillOpacity: 0.9
-        }}).addTo({map_id});
-        circle.bindTooltip(data[4]);
-    }}
-    """
-    m.get_root().script.add_child(folium.Element(js_code))
+    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1386,7 +1329,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1508,7 +1451,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1547,7 +1490,7 @@ with aba1:
             if vol_nao_plotado_sim > 0:
                 st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_sim:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
             elif vol_aprox_sim == 0 and vol_nao_plotado_sim == 0:
-                st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso no mapa.")
+                st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso.")
 
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📊 Ver Tabelas de Volumetria (Cenário Simulado)", expanded=False):
@@ -1730,7 +1673,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1867,8 +1810,6 @@ with aba3:
                 df_ref_safe = df_referencia.copy()
                 
                 df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
-                df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
-                
                 df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
                 df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
                 
@@ -1912,39 +1853,6 @@ with aba3:
                 
                 df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
                 st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
-                
-                # --- INÍCIO DA VALIDAÇÃO DE CEPS DUPLICADOS (CENÁRIO SIMULADO) ---
-                st.markdown("<br><h5>🔍 Validação de CEPs Duplicados na Simulação</h5>", unsafe_allow_html=True)
-                
-                df_valid_sim_ceps = df_cidade_sim[df_cidade_sim['Transportadora'] != TAG_MISSORTING]
-                cep_counts_sim = df_valid_sim_ceps.groupby(COLUNA_CEP)['Transportadora'].nunique()
-                shared_ceps_sim = cep_counts_sim[cep_counts_sim > 1].index
-                
-                if shared_ceps_sim.empty:
-                    st.success("✅ Não foram encontrados CEPs duplicados na simulação.")
-                else:
-                    df_dupes_raw = df_valid_sim_ceps[df_valid_sim_ceps[COLUNA_CEP].isin(shared_ceps_sim)]
-                    
-                    df_dupes_agg = df_dupes_raw.groupby(COLUNA_CEP).agg(
-                        Parceiros_envolvidos=('Transportadora', lambda x: ' + '.join(sorted(x.unique()))),
-                        bairro=('Bairro', 'first'),
-                        município=('Cidade', 'first')
-                    ).reset_index()
-                    
-                    df_dupes_agg['estado'] = uf_automatica
-                    
-                    df_dupes_ranges = df_dupes_agg.groupby(['Parceiros_envolvidos', 'estado', 'município', 'bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
-                    df_dupes_ranges.rename(columns={'min': 'CEP inicial', 'max': 'CEP final'}, inplace=True)
-                    
-                    df_dupes_ranges['CEP inicial'] = df_dupes_ranges['CEP inicial'].apply(formatar_cep)
-                    df_dupes_ranges['CEP final'] = df_dupes_ranges['CEP final'].apply(fechar_buraco_cep).apply(formatar_cep)
-                    
-                    cols_order = ['CEP inicial', 'CEP final', 'bairro', 'município', 'estado', 'Parceiros_envolvidos']
-                    df_dupes_ranges = df_dupes_ranges[cols_order].sort_values(by=['município', 'bairro', 'CEP inicial'])
-                    
-                    st.warning(f"⚠️ Atenção: Identificamos {len(shared_ceps_sim)} CEP(s) que ainda possuem sobreposição de parceiros no Cenário Simulado.")
-                    st.dataframe(df_dupes_ranges, use_container_width=True, hide_index=True)
-                # --- FIM DA VALIDAÇÃO ---
                 
                 st.download_button(
                     label="📥 Baixar CEPs Cenário Simulado (Excel)",

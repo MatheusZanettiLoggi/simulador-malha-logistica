@@ -305,7 +305,6 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df['Bairro'] = df['Bairro'].apply(lambda x: de_para_dict.get(x, x))
     df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
     
-    # Substitui pelo nome padronizado do IBGE no menu esquerdo e tabelas, se existir correspondência
     def format_bairro(row):
         jb = row['Join_Bairro']
         if jb in ibge_name_map:
@@ -360,7 +359,7 @@ def load_dados(excel_file, zip_file, modo):
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
     if modo == "🏙️ Intra-Município (Por Bairros)":
-        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Package Register Bairro de Entrega', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
+        df_vol = df.groupby(['Package Register Cidade de Entrega (Correios)', 'Territorial Scope Neighborhood', 'Package Register Last Mile Company Name', COLUNA_CEP])['Package Register # Pacotes'].sum().reset_index()
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
         df_vol['Join_Cidade'] = df_vol['Cidade'].apply(limpa_texto)
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
@@ -519,8 +518,8 @@ else:
     st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
     st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
     
-    arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
-
+    arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'], key="up_planilha")
+    
     st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
     if modo_analise == "🏙️ Intra-Município (Por Bairros)":
         st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
@@ -531,11 +530,13 @@ else:
         st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
         arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
 
-    if arquivo_planilha and arquivo_mapa:
+    if arquivo_planilha is not None:
         st.session_state.loaded_excel_bytes = arquivo_planilha.getvalue()
+    if arquivo_mapa is not None:
         st.session_state.loaded_ibge_bytes = arquivo_mapa.getvalue()
         st.session_state.modo_analise = modo_analise
-    else:
+
+    if st.session_state.get('loaded_excel_bytes') is None or st.session_state.get('loaded_ibge_bytes') is None:
         st.title("🗺️ Simulador de Malha Logística")
         st.info("👈 Por favor, importe os dados na barra lateral à esquerda para iniciar a análise.")
         st.markdown("<br>", unsafe_allow_html=True)
@@ -667,6 +668,25 @@ gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa)]
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
 bairros_ibge = set(gdf_cidade['Chave_Local'])
+divergentes = bairros_planilha - bairros_ibge
+
+# Auto-correção leve (Fuzzy Match >= 90%)
+houve_auto_fix = False
+for div in list(divergentes):
+    cidade_div, bairro_div = div.split('_', 1) if '_' in div else ("", div)
+    opcoes_bairros_cidade = [b.split('_', 1)[1] for b in bairros_ibge if b.startswith(cidade_div + '_')]
+    sugestao = difflib.get_close_matches(bairro_div, opcoes_bairros_cidade, n=1, cutoff=0.90)
+    if sugestao:
+        nomes_originais = df_cidade_orig[df_cidade_orig['Chave_Local'] == div]['Bairro'].unique()
+        for n_orig in nomes_originais:
+            st.session_state.de_para_bairros[n_orig] = sugestao[0]
+        houve_auto_fix = True
+        
+if houve_auto_fix:
+    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
+        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+    st.rerun()
+
 divergentes = bairros_planilha - bairros_ibge
 
 if divergentes:
@@ -979,6 +999,14 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
+
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     for _, row in _gdf_cidade.iterrows():
@@ -1073,16 +1101,17 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False, bairros_ativos=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
-    folium.GeoJson(
-        gdf_mapa,
-        style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
-    ).add_to(m)
+    if not gdf_mapa.empty:
+        folium.GeoJson(
+            gdf_mapa,
+            style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
+        ).add_to(m)
     
-    bairros_selec_safe = globals().get('bairros_selecionados', [])
+    bairros_selec_safe = bairros_ativos if bairros_ativos else []
     
     cols = list(df_pontos.columns)
     idx_chave_local = cols.index('Chave_Local')
@@ -1313,7 +1342,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1435,7 +1464,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1657,7 +1686,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords=None, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1695,7 +1724,7 @@ with aba2:
                     if vol_nao_plotado_ia > 0:
                         st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_ia:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
                     elif vol_aprox_ia == 0 and vol_nao_plotado_ia == 0:
-                        st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso.")
+                        st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso no mapa.")
 
             st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("📊 Ver Tabelas de Volumetria (Cenário IA)", expanded=False):

@@ -552,10 +552,10 @@ else:
     st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
     
     # -------------------------------------------------------------
-    # NOVO: Carregamento Blindado para o Streamlit (Evita Tela Branca)
+    # SISTEMA DE UPLOAD COM MEMÓRIA BLINDADA
     # -------------------------------------------------------------
     arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'], key="up_planilha")
-
+    
     st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
     if modo_analise == "🏙️ Intra-Município (Por Bairros)":
         st.sidebar.caption("Para análises dentro de uma mesma cidade, precisamos do mapa de Bairros.")
@@ -572,9 +572,8 @@ else:
         st.session_state.loaded_ibge_bytes = arquivo_mapa.getvalue()
         st.session_state.modo_analise = modo_analise
 
-    if st.session_state.get('loaded_excel_bytes') is not None and st.session_state.get('loaded_ibge_bytes') is not None:
-        pass 
-    else:
+    # Impede que bugs visuais do "rerun" do Streamlit causem tela branca se o arquivo já está na memória
+    if st.session_state.get('loaded_excel_bytes') is None or st.session_state.get('loaded_ibge_bytes') is None:
         st.title("🗺️ Simulador de Malha Logística")
         st.info("👈 Por favor, importe os dados na barra lateral à esquerda para iniciar a análise.")
         st.markdown("<br>", unsafe_allow_html=True)
@@ -697,7 +696,6 @@ df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.sessio
 # Recorte Geométrico usando a Chave Robusta
 cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
 bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
-# Garantindo que o gdf também contém a cidade base para evitar bugs se faltar o polígono de parceiros independentes
 gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa)]
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
@@ -1023,6 +1021,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                 time.sleep(1)
                 st.rerun()
 
+transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", [t for t in transp_ativas if t != TAG_MISSORTING], default=[t for t in transp_ativas if t != TAG_MISSORTING])
 with st.sidebar.expander("🎨 Personalizar Cores"):
     for transp in transp_ativas:
         if transp == TAG_MISSORTING: continue
@@ -1157,8 +1156,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
     idx_parceiros = cols.index('Parceiros')
     
     # -------------------------------------------------------------
-    # NOVO: Mapeamento de Âncoras por Cabeça de CEP
-    # Agrupa todos os pontos válidos encontrados pelo IBGE para cada Cabeça de CEP
+    # Mapeamento de Âncoras por Cabeça de CEP
     # -------------------------------------------------------------
     cabeca_to_coords = {}
     for row in df_pontos.itertuples(index=False):
@@ -1212,7 +1210,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if cabeca_cep_val in dict_cabeca_cep_coords:
                 lat_anchor, lon_anchor = dict_cabeca_cep_coords[cabeca_cep_val]
                 
-                # Deslocamento minúsculo para separar diferentes bairros divergentes com a mesma cabeça
                 h_bairro = int(hashlib.md5(chave_id.encode()).hexdigest(), 16)
                 rng_bairro = np.random.RandomState(h_bairro % (2**32 - 1))
                 lat_anchor += rng_bairro.uniform(-0.002, 0.002)
@@ -1807,7 +1804,8 @@ with aba3:
     is_regional = (st.session_state.modo_analise == "🗺️ Regional (Por Cidades)")
     
     if not is_regional:
-        st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}**.")
+        cidade_oficial = limpa_texto(cidade_selecionada)
+        st.info(f"🔍 Identificamos automaticamente que a cidade **{cidade_selecionada}** pertence ao Estado **{uf_automatica}**.")
     else:
         st.info(f"🔍 Identificamos automaticamente o Estado **{uf_automatica}** para a análise regional.")
     
@@ -1823,11 +1821,7 @@ with aba3:
         df_estado['bairro_limpo'] = df_estado['bairro'].apply(limpa_texto)
         
         if not is_regional:
-            if cidades_selecionadas:
-                cidades_oficiais = [limpa_texto(c) for c in cidades_selecionadas]
-                df_cidade_oficial = df_estado[df_estado['municipio_limpo'].isin(cidades_oficiais)].copy()
-            else:
-                df_cidade_oficial = df_estado.copy()
+            df_cidade_oficial = df_estado[df_estado['municipio_limpo'] == cidade_oficial].copy()
             chave_oficial = 'bairro_limpo'
         else:
             df_cidade_oficial = df_estado.copy()
@@ -1890,35 +1884,25 @@ with aba3:
                 df_ref_safe = df_referencia.copy()
                 
                 df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
-                df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
-                
                 df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
                 df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
                 
-                # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
-                map_bairro = df_ref_safe.groupby('Bairro_limpo')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
+                map_bairro = df_ref_safe.groupby(df_ref_safe['Bairro'].apply(limpa_texto))['Transportadora'].first().to_dict()
+                map_cabeca = df_ref_safe.groupby('Cabeca_CEP')['Transportadora'].first().to_dict()
+                map_cep = df_ref_safe.groupby('CEP_Limpo')['Transportadora'].first().to_dict()
+                
                 df_res['Transportadora'] = df_res[chave_bairro].map(map_bairro)
                 
-                # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação do Looker)
-                df_ref_safe['Chave_Cabeca'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['Cabeca_CEP']
-                map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
-                
-                df_res['Chave_Cabeca_res'] = df_res[chave_bairro] + "_" + df_res['Cabeca_CEP_tmp']
-                mask_cab = df_res['Chave_Cabeca_res'].isin(map_cabeca)
+                mask_cab = df_res['Cabeca_CEP_tmp'].isin(map_cabeca)
                 if mask_cab.any():
-                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
+                    df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Cabeca_CEP_tmp'].map(map_cabeca)
                     
-                # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
-                df_ref_safe['Chave_CEP'] = df_ref_safe['Bairro_limpo'] + "_" + df_ref_safe['CEP_Limpo']
-                map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
-                
-                df_res['Chave_CEP_res'] = df_res[chave_bairro] + "_" + df_res['CEP_Limpo']
-                mask_cep = df_res['Chave_CEP_res'].isin(map_cep)
+                mask_cep = df_res['CEP_Limpo'].isin(map_cep)
                 if mask_cep.any():
-                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'Chave_CEP_res'].map(map_cep)
+                    df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'CEP_Limpo'].map(map_cep)
                     
                 df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
-                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Match', 'Chave_Cabeca_res', 'Chave_CEP_res'])
+                df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo'])
                 return df_res
             
             df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, chave_oficial)
@@ -1943,39 +1927,6 @@ with aba3:
                 
                 df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=is_regional)
                 st.dataframe(df_range_sim, use_container_width=True, hide_index=True)
-                
-                # --- INÍCIO DA VALIDAÇÃO DE CEPS DUPLICADOS (CENÁRIO SIMULADO) ---
-                st.markdown("<br><h5>🔍 Validação de CEPs Duplicados na Simulação</h5>", unsafe_allow_html=True)
-                
-                df_valid_sim_ceps = df_cidade_sim[df_cidade_sim['Transportadora'] != TAG_MISSORTING]
-                cep_counts_sim = df_valid_sim_ceps.groupby(COLUNA_CEP)['Transportadora'].nunique()
-                shared_ceps_sim = cep_counts_sim[cep_counts_sim > 1].index
-                
-                if shared_ceps_sim.empty:
-                    st.success("✅ Não foram encontrados CEPs duplicados na simulação.")
-                else:
-                    df_dupes_raw = df_valid_sim_ceps[df_valid_sim_ceps[COLUNA_CEP].isin(shared_ceps_sim)]
-                    
-                    df_dupes_agg = df_dupes_raw.groupby(COLUNA_CEP).agg(
-                        Parceiros_envolvidos=('Transportadora', lambda x: ' + '.join(sorted(x.unique()))),
-                        bairro=('Bairro', 'first'),
-                        município=('Cidade', 'first')
-                    ).reset_index()
-                    
-                    df_dupes_agg['estado'] = uf_automatica
-                    
-                    df_dupes_ranges = df_dupes_agg.groupby(['Parceiros_envolvidos', 'estado', 'município', 'bairro'])[COLUNA_CEP].agg(['min', 'max']).reset_index()
-                    df_dupes_ranges.rename(columns={'min': 'CEP inicial', 'max': 'CEP final'}, inplace=True)
-                    
-                    df_dupes_ranges['CEP inicial'] = df_dupes_ranges['CEP inicial'].apply(formatar_cep)
-                    df_dupes_ranges['CEP final'] = df_dupes_ranges['CEP final'].apply(fechar_buraco_cep).apply(formatar_cep)
-                    
-                    cols_order = ['CEP inicial', 'CEP final', 'bairro', 'município', 'estado', 'Parceiros_envolvidos']
-                    df_dupes_ranges = df_dupes_ranges[cols_order].sort_values(by=['município', 'bairro', 'CEP inicial'])
-                    
-                    st.warning(f"⚠️ Atenção: Identificamos {len(shared_ceps_sim)} CEP(s) que ainda possuem sobreposição de parceiros no Cenário Simulado.")
-                    st.dataframe(df_dupes_ranges, use_container_width=True, hide_index=True)
-                # --- FIM DA VALIDAÇÃO ---
                 
                 st.download_button(
                     label="📥 Baixar CEPs Cenário Simulado (Excel)",
@@ -2026,7 +1977,6 @@ with aba3:
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
-
 
 # ---------------------------------------------------------
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)

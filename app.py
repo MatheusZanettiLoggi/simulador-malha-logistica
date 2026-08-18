@@ -300,11 +300,19 @@ def carregar_ceps_estado(uf):
     return pd.DataFrame()
 
 @st.cache_data
-def otimizar_base_global(df_raw, de_para_dict):
+def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df = df_raw.copy()
     df['Bairro'] = df['Bairro'].apply(lambda x: de_para_dict.get(x, x))
     df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
-    df['Bairro'] = df['Bairro'].astype(str).str.title()
+    
+    # Substitui pelo nome padronizado do IBGE no menu esquerdo e tabelas, se existir correspondência
+    def format_bairro(row):
+        jb = row['Join_Bairro']
+        if jb in ibge_name_map:
+            return ibge_name_map[jb]
+        return str(row['Bairro']).title()
+        
+    df['Bairro'] = df.apply(format_bairro, axis=1)
     
     modes = df.groupby('Join_Bairro')['Bairro'].agg(lambda x: x.mode()[0] if not x.empty else x.iloc[0]).to_dict()
     df['Bairro'] = df['Join_Bairro'].map(modes)
@@ -377,7 +385,6 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
-# Função de Cruzamento e Mapeamento Robusto dos Correios (Hierarquia Rigorosa)
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -548,6 +555,11 @@ st.session_state.qtd_dias_analise = qtd_dias
 lbl_local = "Município" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairro"
 lbl_locais = "Municípios" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "Bairros"
 
+# Mapeamento do nome padrão do IBGE para o menu lateral
+ibge_name_map = {}
+if 'NM_BAIRRO_STR' in gdf.columns and 'Join_Bairro' in gdf.columns:
+    ibge_name_map = dict(zip(gdf['Join_Bairro'], gdf['NM_BAIRRO_STR']))
+
 if 'regras_simulacao' not in st.session_state: st.session_state.regras_simulacao = []
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
@@ -579,7 +591,7 @@ st.session_state.cores_transp['Regiões sem capacidade'] = '#c0392b'
 st.session_state.cores_transp[TAG_MISSORTING] = '#1a1a1a' 
 
 with timer("2. Limpeza e de_para global"):
-    df_vol = otimizar_base_global(df_vol_raw, st.session_state.de_para_bairros)
+    df_vol = otimizar_base_global(df_vol_raw, st.session_state.de_para_bairros, ibge_name_map)
 
 st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
@@ -888,11 +900,13 @@ if bases_sem_coord or st.session_state.erros_geocoding:
 
     m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
-    folium.GeoJson(
-        gdf_cidade, 
-        style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
-        tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
-    ).add_to(m_helper)
+    
+    if not gdf_cidade.empty:
+        folium.GeoJson(
+            gdf_cidade, 
+            style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
+            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
+        ).add_to(m_helper)
     
     if not gdf_foco.empty:
         folium.GeoJson(
@@ -998,6 +1012,16 @@ def extrair_pontos_bairros(_gdf_cidade):
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
+# Apenas para o Algoritmo da IA e Fallback de Cabeças de CEP
+def extrair_centroides_ia(_gdf_cidade):
+    dict_centroids = {}
+    for _, row in _gdf_cidade.iterrows():
+        if pd.notnull(row['geometry']):
+            dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+    return dict_centroids
+
+dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
+
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
     df_pontos = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
@@ -1064,12 +1088,32 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     idx_chave_local = cols.index('Chave_Local')
     idx_cidade = cols.index('Cidade')
     idx_bairro = cols.index('Bairro')
+    idx_cabeca_cep = cols.index('Cabeca_CEP')
     idx_cep = cols.index(COLUNA_CEP)
     idx_transp = cols.index('Transportadora')
     idx_vol = cols.index('Volume')
     idx_qtd_bases = cols.index('Qtd_Bases')
     idx_parceiros = cols.index('Parceiros')
     
+    # -------------------------------------------------------------
+    # Mapeamento de Âncoras por Cabeça de CEP
+    # -------------------------------------------------------------
+    cabeca_to_coords = {}
+    for row in df_pontos.itertuples(index=False):
+        chave = row[idx_chave_local]
+        cab = row[idx_cabeca_cep]
+        if chave in dict_bairros_centroides:
+            if cab not in cabeca_to_coords:
+                cabeca_to_coords[cab] = set()
+            cabeca_to_coords[cab].add(dict_bairros_centroides[chave])
+            
+    dict_cabeca_cep_coords = {}
+    for cab, coords_set in cabeca_to_coords.items():
+        if coords_set:
+            avg_lat = sum(c[0] for c in coords_set) / len(coords_set)
+            avg_lon = sum(c[1] for c in coords_set) / len(coords_set)
+            dict_cabeca_cep_coords[cab] = (avg_lat, avg_lon)
+            
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -1089,14 +1133,34 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         row_ref = rows[0]
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
+        cabeca_cep_val = row_ref[idx_cabeca_cep]
         
-        # Pula a plotagem de bairros não mapeados (Eles aparecerão na métrica de aviso no painel)
-        if chave_id not in dict_bairros_pontos_espalhados:
-            continue
+        # 1. Tenta plotar dentro do Polígono real (se o bairro existir no IBGE)
+        if chave_id in dict_bairros_pontos_espalhados:
+            valid_points = dict_bairros_pontos_espalhados[chave_id]
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            lat_center, lon_center = valid_points[h_cep % len(valid_points)]
+        elif chave_id in dict_bairros_centroides:
+            lat_center, lon_center = dict_bairros_centroides[chave_id]
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
+            lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
+        elif cabeca_cep_val in dict_cabeca_cep_coords:
+            # 2. Bairro não encontrado no IBGE: Fallback Inteligente pela Cabeça de CEP
+            lat_anchor, lon_anchor = dict_cabeca_cep_coords[cabeca_cep_val]
             
-        valid_points = dict_bairros_pontos_espalhados[chave_id]
-        h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-        lat_center, lon_center = valid_points[h_cep % len(valid_points)]
+            h_bairro = int(hashlib.md5(chave_id.encode()).hexdigest(), 16)
+            rng_bairro = np.random.RandomState(h_bairro % (2**32 - 1))
+            lat_anchor += rng_bairro.uniform(-0.002, 0.002)
+            lon_anchor += rng_bairro.uniform(-0.002, 0.002)
+            
+            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+            rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
+            lat_center = lat_anchor + rng_cep.normal(0, 0.0010)
+            lon_center = lon_anchor + rng_cep.normal(0, 0.0010)
+        else:
+            # 3. Sem Referência: Pula a plotagem para não jogar pontos errados no mapa
+            continue
             
         qtd_real = len(rows)
         qtd_bases = row_ref[idx_qtd_bases]
@@ -1118,6 +1182,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
+                # Substitui as "flores perfeitas" por um agrupamento orgânico muito mais limpo visualmente
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.00025)
@@ -1278,9 +1343,13 @@ with aba1:
             vol_shared = df_valid_orig[df_valid_orig[COLUNA_CEP].isin(shared_ceps)]['Volume'].sum()
             
             bairros_ibge_orig = set(gdf_cidade['Chave_Local'])
-            df_unmapped_orig = df_valid_orig[~df_valid_orig['Chave_Local'].isin(bairros_ibge_orig)]
-            vol_unmapped_orig = df_unmapped_orig['Volume'].sum()
-            perc_unmapped_orig = (vol_unmapped_orig / vol_atual * 100) if vol_atual > 0 else 0
+            cabecas_mapeadas_orig = df_valid_orig[df_valid_orig['Chave_Local'].isin(bairros_ibge_orig)]['Cabeca_CEP'].unique()
+            df_divergente_orig = df_valid_orig[~df_valid_orig['Chave_Local'].isin(bairros_ibge_orig)]
+            
+            df_aprox_orig = df_divergente_orig[df_divergente_orig['Cabeca_CEP'].isin(cabecas_mapeadas_orig)]
+            df_nao_plotado_orig = df_divergente_orig[~df_divergente_orig['Cabeca_CEP'].isin(cabecas_mapeadas_orig)]
+            vol_aprox_orig = df_aprox_orig['Volume'].sum()
+            vol_nao_plotado_orig = df_nao_plotado_orig['Volume'].sum()
             
             st.markdown("<br>", unsafe_allow_html=True)
             if vol_shared > 0:
@@ -1289,9 +1358,11 @@ with aba1:
                 st.write(f"- 🟢 Compartilhados: **0 pacotes**")
                 
             st.markdown("<br>", unsafe_allow_html=True)
-            if vol_unmapped_orig > 0:
-                st.warning(f"⚠️ **Não Plotados (Divergência IBGE):** {vol_unmapped_orig:,.0f} pacotes ({perc_unmapped_orig:.1f}%)")
-            else:
+            if vol_aprox_orig > 0:
+                st.warning(f"⚠️ **Plotados por Aproximação (Cabeça de CEP):** {vol_aprox_orig:,.0f} pacotes de Bairros não mapeados foram posicionados junto a outros CEPs similares.")
+            if vol_nao_plotado_orig > 0:
+                st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_orig:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
+            elif vol_aprox_orig == 0 and vol_nao_plotado_orig == 0:
                 st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso no mapa.")
             
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1389,15 +1460,21 @@ with aba1:
                 st.write(f"- {base}: **{v_dia:,.0f} pct/dia** ({perc:.1f}%)")
 
             bairros_ibge_sim = set(gdf_cidade['Chave_Local'])
-            df_unmapped_sim = df_valid_sim[~df_valid_sim['Chave_Local'].isin(bairros_ibge_sim)]
-            vol_unmapped_sim = df_unmapped_sim['Volume'].sum()
-            perc_unmapped_sim = (vol_unmapped_sim / vol_sim_total * 100) if vol_sim_total > 0 else 0
+            cabecas_mapeadas_sim = df_valid_sim[df_valid_sim['Chave_Local'].isin(bairros_ibge_sim)]['Cabeca_CEP'].unique()
+            df_divergente_sim = df_valid_sim[~df_valid_sim['Chave_Local'].isin(bairros_ibge_sim)]
+            
+            df_aprox_sim = df_divergente_sim[df_divergente_sim['Cabeca_CEP'].isin(cabecas_mapeadas_sim)]
+            df_nao_plotado_sim = df_divergente_sim[~df_divergente_sim['Cabeca_CEP'].isin(cabecas_mapeadas_sim)]
+            vol_aprox_sim = df_aprox_sim['Volume'].sum()
+            vol_nao_plotado_sim = df_nao_plotado_sim['Volume'].sum()
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if vol_unmapped_sim > 0:
-                st.warning(f"⚠️ **Não Plotados (Divergência IBGE):** {vol_unmapped_sim:,.0f} pacotes ({perc_unmapped_sim:.1f}%)")
-            else:
-                st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso.")
+            if vol_aprox_sim > 0:
+                st.warning(f"⚠️ **Plotados por Aproximação (Cabeça de CEP):** {vol_aprox_sim:,.0f} pacotes de Bairros não mapeados foram posicionados junto a outros CEPs similares.")
+            if vol_nao_plotado_sim > 0:
+                st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_sim:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
+            elif vol_aprox_sim == 0 and vol_nao_plotado_sim == 0:
+                st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso no mapa.")
 
     st.markdown("<br>", unsafe_allow_html=True)
     with st.expander("📊 Ver Tabelas de Volumetria (Cenário Simulado)", expanded=False):
@@ -1513,6 +1590,8 @@ with aba2:
                         
                         volume_atual = {b: 0 for b in bases_ativas_ia}
                         
+                        bairros_dict_latlon = df_pontos_orig.groupby('Cabeca_CEP')[['lat', 'lon']].first().to_dict('index')
+                        
                         bairros_info_dict = {}
                         for _, row in df_ia_base.iterrows():
                             cabeca = row['Cabeca_CEP']
@@ -1602,14 +1681,20 @@ with aba2:
                         st.write(f"- {base}: **{v_dia:,.0f} pct/dia** ({perc:.1f}%)")
 
                     bairros_ibge_ia = set(gdf_cidade['Chave_Local'])
-                    df_unmapped_ia = df_valid_ia[~df_valid_ia['Chave_Local'].isin(bairros_ibge_ia)]
-                    vol_unmapped_ia = df_unmapped_ia['Volume'].sum()
-                    perc_unmapped_ia = (vol_unmapped_ia / vol_ia_total * 100) if vol_ia_total > 0 else 0
+                    cabecas_mapeadas_ia = df_valid_ia[df_valid_ia['Chave_Local'].isin(bairros_ibge_ia)]['Cabeca_CEP'].unique()
+                    df_divergente_ia = df_valid_ia[~df_valid_ia['Chave_Local'].isin(bairros_ibge_ia)]
+                    
+                    df_aprox_ia = df_divergente_ia[df_divergente_ia['Cabeca_CEP'].isin(cabecas_mapeadas_ia)]
+                    df_nao_plotado_ia = df_divergente_ia[~df_divergente_ia['Cabeca_CEP'].isin(cabecas_mapeadas_ia)]
+                    vol_aprox_ia = df_aprox_ia['Volume'].sum()
+                    vol_nao_plotado_ia = df_nao_plotado_ia['Volume'].sum()
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if vol_unmapped_ia > 0:
-                        st.warning(f"⚠️ **Não Plotados (Divergência IBGE):** {vol_unmapped_ia:,.0f} pacotes ({perc_unmapped_ia:.1f}%)")
-                    else:
+                    if vol_aprox_ia > 0:
+                        st.warning(f"⚠️ **Plotados por Aproximação (Cabeça de CEP):** {vol_aprox_ia:,.0f} pacotes de Bairros não mapeados foram posicionados junto a outros CEPs similares.")
+                    if vol_nao_plotado_ia > 0:
+                        st.error(f"❌ **Não Plotados (Sem Referência):** {vol_nao_plotado_ia:,.0f} pacotes. Corrija a divergência no menu lateral para exibí-los.")
+                    elif vol_aprox_ia == 0 and vol_nao_plotado_ia == 0:
                         st.success(f"✅ Todos os bairros foram mapeados e plotados com sucesso.")
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1709,8 +1794,6 @@ with aba3:
                 df_ref_safe = df_referencia.copy()
                 
                 df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
-                df_ref_safe['Bairro_limpo'] = df_ref_safe['Bairro'].apply(limpa_texto)
-                
                 df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
                 df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
                 

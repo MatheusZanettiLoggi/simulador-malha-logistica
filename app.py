@@ -254,6 +254,43 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974)
+    }
+    return uf_coords.get(uf, (-16.6869, -49.2648))
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -386,7 +423,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
     df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
     
-    # A chave para cruzamento precisa envolver Cidade e Bairro para evitar sobrescrever nomes repetidos
     if is_regional:
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo']
@@ -394,11 +430,9 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
         df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto) + "_" + df_ref_safe['Bairro'].apply(limpa_texto)
         df_res['Chave_Match'] = df_res['municipio_limpo'] + "_" + df_res['bairro_limpo']
     
-    # 1. Mapeamento por Bairro (Pega a base dominante do bairro)
     map_bairro = df_ref_safe.groupby('Chave_Match')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
     df_res['Transportadora'] = df_res['Chave_Match'].map(map_bairro)
     
-    # 2. Mapeamento por Cabeça de CEP (Restrito estritamente dentro do Bairro para evitar contaminação)
     df_ref_safe['Chave_Cabeca'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['Cabeca_CEP']
     map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
     
@@ -407,7 +441,6 @@ def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     if mask_cab.any():
         df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
         
-    # 3. Mapeamento por CEP Específico (Restrito estritamente dentro do Bairro)
     df_ref_safe['Chave_CEP'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['CEP_Limpo']
     map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
     
@@ -958,7 +991,44 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro)
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974)
+    }
+    return uf_coords.get(uf, (-16.6869, -49.2648))
+
+# Algoritmo Point-in-Polygon (Gera pontos reais dentro das bordas exatas do bairro ou cidade)
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     
@@ -1088,7 +1158,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
                 st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False, bairros_ativos=None):
+def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False, bairros_ativos=None):
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
@@ -1130,6 +1200,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
         
+        # Recupera as posições do cep e cria o fallback geográfico para polígonos faltantes
         if chave_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1140,11 +1211,17 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
             lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
-            # Espalhamento puro matemático ao redor do centro carregado para não haver sobreposição em 1 pixel
-            h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
-            rng = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = cy + rng.normal(0, 0.015)
-            lon_center = cx + rng.normal(0, 0.015)
+            coord_cidade = dict_fallback.get(cidade_nome)
+            if not coord_cidade:
+                coord_cidade = get_city_coords(cidade_nome, uf_estado)
+            if coord_cidade:
+                lat_cid, lon_cid = coord_cidade
+                h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
+                rng = np.random.RandomState(h_cep % (2**32 - 1))
+                lat_center = lat_cid + rng.normal(0, 0.015)
+                lon_center = lon_cid + rng.normal(0, 0.015)
+            else:
+                lat_center, lon_center = cy, cx
             
         qtd_real = len(rows)
         qtd_bases = row_ref[idx_qtd_bases]
@@ -1166,13 +1243,31 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                offset_r = 0.0004
-                angle = (idx / qtd_real) * 2 * np.pi
-                lat_pino = lat_center + offset_r * np.cos(angle)
-                lon_pino = lon_center + offset_r * np.sin(angle)
-                markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
+                # Substitui o círculo geométrico por um espalhamento orgânico (jitter natural)
+                h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
+                rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
+                lat_pino = lat_center + rng_pino.normal(0, 0.00025)
+                lon_pino = lon_center + rng_pino.normal(0, 0.00025)
+                markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
-    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
+    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
+    map_id = m.get_name()
+    js_code = f"""
+    var markers = {json.dumps(markers_data)};
+    for (var i=0; i<markers.length; i++) {{
+        var data = markers[i];
+        var circle = L.circleMarker([data[0], data[1]], {{
+            radius: data[3],
+            color: 'white',
+            weight: 0.5,
+            fill: true,
+            fillColor: data[2],
+            fillOpacity: 0.9
+        }}).addTo({map_id});
+        circle.bindTooltip(data[4]);
+    }}
+    """
+    m.get_root().script.add_child(folium.Element(js_code))
 
     if pinos_bases:
         for base, coords in pinos_bases.items():
@@ -1269,15 +1364,47 @@ with col_btn:
         use_container_width=True
     )
 
-if not gdf_cidade.empty:
-    cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
-else:
-    cy, cx = -15.7801, -47.9292 
-zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
-
 with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
+
+# Sistema Batched de Geocoding (Roda uma única vez por CIDADE ausente, MUITO mais rápido)
+dict_fallback_coords = {}
+missing_cities = set()
+
+for df_p in [df_pontos_orig, df_pontos_sim]:
+    for _, row in df_p.iterrows():
+        chave = row['Chave_Local']
+        if chave not in dict_bairros_pontos_espalhados and chave not in dict_bairros_centroides:
+            missing_cities.add(row['Cidade'])
+
+if missing_cities:
+    with st.spinner(f"🛰️ Satélite localizando o centro de {len(missing_cities)} município(s) sem polígono... (Isso ocorre apenas uma vez)"):
+        for cid in missing_cities:
+            coord = get_city_coords(cid, uf_automatica)
+            dict_fallback_coords[cid] = coord
+
+# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite / Estado
+if not gdf_cidade.empty:
+    cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
+else:
+    valid_coords = [c for c in dict_fallback_coords.values() if c]
+    if valid_coords:
+        cy = np.mean([c[0] for c in valid_coords])
+        cx = np.mean([c[1] for c in valid_coords])
+    else:
+        # Fallback de centro de acordo com o Estado detectado
+        uf_defaults = {
+            "GO": (-16.6869, -49.2648),
+            "RJ": (-22.9068, -43.1729),
+            "SP": (-23.5505, -46.6333),
+            "DF": (-15.7801, -47.9292),
+            "CE": (-3.7172, -38.5433),
+            "BA": (-12.9714, -38.5014)
+        }
+        cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
+
+zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
 aba1, aba2, aba3 = st.tabs(["🗺️ Simulador Manual", "🧠 Inteligência Artificial (Smart Routing)", "🗃️ Ranges de CEP (Oficial)"])
 
@@ -1290,7 +1417,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, pinos_bases=pinos_orig, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1395,7 +1522,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, pinos_bases=pinos_sim, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1567,7 +1694,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_cidade, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, pinos_bases=pinos_ia, expandido=expandir_mapa, bairros_ativos=bairros_selecionados)
                 
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
@@ -1827,17 +1954,16 @@ with aba3:
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
 
-
 # ---------------------------------------------------------
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)
 # ---------------------------------------------------------
 st.sidebar.markdown("---")
-st.sidebar.markdown("### ⏱️ Diagnóstico de Performance")
-st.sidebar.write("Baixe o arquivo para avaliar os gargalos de processamento.")
-log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
-st.sidebar.download_button(
-    label="📥 Baixar log_performance.json",
-    data=log_json,
-    file_name="log_performance.json",
-    mime="application/json"
-)
+with st.sidebar.expander("⏱️ Diagnóstico de Performance", expanded=False):
+    st.write("Baixe o arquivo abaixo e envie para a avaliação do gargalo de processamento.")
+    log_json = json.dumps(st.session_state.perf_logs, indent=4, ensure_ascii=False)
+    st.download_button(
+        label="📥 Baixar log_performance.json",
+        data=log_json,
+        file_name="log_performance.json",
+        mime="application/json"
+    )

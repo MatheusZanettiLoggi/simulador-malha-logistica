@@ -691,7 +691,7 @@ else:
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
-# Recorte Geométrico
+# Recorte Geométrico usando a Chave Robusta
 cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
 bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
 gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa) & gdf['Join_Bairro'].isin(bairros_mapa)]
@@ -834,7 +834,7 @@ if bases_sem_coord or st.session_state.erros_geocoding:
     submit_enderecos = st.button("Localizar Bases e Iniciar Simulador 🚀", type="primary", use_container_width=True)
         
     if submit_enderecos:
-        with st.spinner("Analisando coordenadas e atualizando capacities..."):
+        with st.spinner("Analisando coordenadas e atualizando capacidades..."):
             erros = []
             for base in novos_enderecos:
                 st.session_state.capacidades_bases[base] = novas_capacidades[base]
@@ -993,9 +993,58 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-def extrair_pontos_bairros(gdf_cidade_local):
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974),
+        "BA": (-12.9714, -38.5014),
+        "CE": (-3.7172, -38.5433)
+    }
+    return uf_coords.get(uf, (-15.7801, -47.9292))
+
+def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
-    for _, row in gdf_cidade_local.iterrows():
+    
+    # Prepara um dicionário com os limites de toda a cidade para bairros não mapeados
+    city_bounds = {}
+    for cid in _gdf_cidade['Join_Cidade'].unique():
+        gdf_mun = _gdf_cidade[_gdf_cidade['Join_Cidade'] == cid]
+        if not gdf_mun.empty:
+            geom_mun = gdf_mun.unary_union
+            if pd.notnull(geom_mun):
+                city_bounds[cid] = (geom_mun.bounds, geom_mun)
+
+    for _, row in _gdf_cidade.iterrows():
         geom = row['geometry']
         if pd.notnull(geom):
             b_id = row['Chave_Local']
@@ -1021,6 +1070,31 @@ def extrair_pontos_bairros(gdf_cidade_local):
                 pts.append((rep.y, rep.x))
                 
             dict_pontos[b_id] = pts
+            
+    # Garantir que todas as chaves (mesmo as sem polígono de bairro) tenham pontos baseados na cidade
+    todas_chaves_planilha = df_cidade_orig['Chave_Local'].unique()
+    for chave in todas_chaves_planilha:
+        if chave not in dict_pontos:
+            cidade_alvo = chave.split('_')[0] if '_' in chave else chave
+            if cidade_alvo in city_bounds:
+                bounds, geom_mun = city_bounds[cidade_alvo]
+                minx, miny, maxx, maxy = bounds
+                pts = []
+                h_chave = int(hashlib.md5(chave.encode()).hexdigest(), 16)
+                rng = np.random.RandomState(h_chave % (2**32 - 1))
+                attempts = 0
+                while len(pts) < 60 and attempts < 2000:
+                    rx = rng.uniform(minx, maxx)
+                    ry = rng.uniform(miny, maxy)
+                    pnt = Point(rx, ry)
+                    if geom_mun.contains(pnt):
+                        pts.append((ry, rx))
+                    attempts += 1
+                if not pts:
+                    rep = geom_mun.representative_point()
+                    pts.append((rep.y, rep.x))
+                dict_pontos[chave] = pts
+
     return dict_pontos
 
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
@@ -1141,10 +1215,13 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
             coord_cidade = dict_fallback.get(cidade_nome)
+            if not coord_cidade:
+                coord_cidade = get_city_coords(cidade_nome, uf_estado)
             if coord_cidade:
                 lat_cid, lon_cid = coord_cidade
                 h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
                 rng = np.random.RandomState(h_cep % (2**32 - 1))
+                # Espalhamento orgânico ao redor do centro da cidade para CEPs sem Bairro
                 lat_center = lat_cid + rng.normal(0, 0.015)
                 lon_center = lon_cid + rng.normal(0, 0.015)
             else:
@@ -1170,31 +1247,14 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                # Substitui o círculo geométrico por um espalhamento orgânico (jitter natural)
+                # Substitui as 'flores perfeitas' por um espalhamento orgânico muito mais leve visualmente
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.00025)
                 lon_pino = lon_center + rng_pino.normal(0, 0.00025)
                 markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
-    # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
-    map_id = m.get_name()
-    js_code = f"""
-    var markers = {json.dumps(markers_data)};
-    for (var i=0; i<markers.length; i++) {{
-        var data = markers[i];
-        var circle = L.circleMarker([data[0], data[1]], {{
-            radius: data[3],
-            color: 'white',
-            weight: 0.5,
-            fill: true,
-            fillColor: data[2],
-            fillOpacity: 0.9
-        }}).addTo({map_id});
-        circle.bindTooltip(data[4]);
-    }}
-    """
-    m.get_root().script.add_child(folium.Element(js_code))
+    FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
     if pinos_bases:
         for base, coords in pinos_bases.items():

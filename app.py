@@ -254,6 +254,45 @@ def buscar_coordenadas(endereco_busca):
         pass 
     return None
 
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    cidade_limpa = limpa_texto(cidade)
+    fallback_map = {
+        "GOIANIA": (-16.6869, -49.2648),
+        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
+        "SENADOR CANEDO": (-16.7086, -49.0961),
+        "RIO DE JANEIRO": (-22.9068, -43.1729),
+        "TERESOPOLIS": (-22.4122, -42.9653),
+        "BARRA DO PIRAI": (-22.4711, -43.8247),
+        "NOVA FRIBURGO": (-22.2819, -42.5311),
+        "BRASILIA": (-15.7801, -47.9292),
+        "FORTALEZA": (-3.7172, -38.5433),
+        "SALVADOR": (-12.9714, -38.5014),
+        "LAURO DE FREITAS": (-12.8944, -38.3272),
+        "CAMACARI": (-12.6975, -38.3241),
+        "SIMOES FILHO": (-12.7844, -38.4044),
+        "SAO PAULO": (-23.5505, -46.6333)
+    }
+    if cidade_limpa in fallback_map:
+        return fallback_map[cidade_limpa]
+        
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    res = buscar_coordenadas(f"{cidade}, Brasil")
+    if res: return res
+    
+    uf_coords = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "MT": (-15.6014, -56.0974),
+        "BA": (-12.9714, -38.5014),
+        "CE": (-3.7172, -38.5433)
+    }
+    return uf_coords.get(uf, (-15.7801, -47.9292))
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -377,6 +416,7 @@ def load_dados(excel_file, zip_file, modo):
     
     return df_vol, gdf, qtd_dias
 
+# Função de Cruzamento e Mapeamento Robusto dos Correios
 def aplicar_mapeamento_correios(df_oficial, df_referencia, is_regional):
     df_res = df_oficial.copy()
     df_ref_safe = df_referencia.copy()
@@ -471,10 +511,7 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.de_para_bairros = saved_state.get('de_para_bairros', {})
                     st.session_state.modo_analise = saved_state.get('modo_analise', "🏙️ Intra-Município (Por Bairros)")
                     
-                    st.session_state.cidades_selecionadas_backup = saved_state.get('cidades_selecionadas_backup', [])
-                    if 'cidade_selecionada_backup' in saved_state and not st.session_state.cidades_selecionadas_backup:
-                        st.session_state.cidades_selecionadas_backup = [saved_state['cidade_selecionada_backup']]
-                        
+                    st.session_state.cidade_selecionada_backup = saved_state.get('cidade_selecionada_backup')
                     st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
                     st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
@@ -513,7 +550,11 @@ else:
     st.sidebar.markdown("**1. Planilha de Volumetria**")
     st.sidebar.caption("Extraia os dados atualizados da operação diretamente do Looker.")
     st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
-    arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'])
+    
+    # -------------------------------------------------------------
+    # NOVO: Carregamento Blindado para o Streamlit (Evita Tela Branca)
+    # -------------------------------------------------------------
+    arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'], key="up_planilha")
 
     st.sidebar.markdown("<br>**2. Mapa Geográfico (Malha IBGE)**", unsafe_allow_html=True)
     if modo_analise == "🏙️ Intra-Município (Por Bairros)":
@@ -525,10 +566,14 @@ else:
         st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
         arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Cidades (ZIP)", type=['zip'], key="up_cidade")
 
-    if arquivo_planilha and arquivo_mapa:
+    if arquivo_planilha is not None:
         st.session_state.loaded_excel_bytes = arquivo_planilha.getvalue()
+    if arquivo_mapa is not None:
         st.session_state.loaded_ibge_bytes = arquivo_mapa.getvalue()
         st.session_state.modo_analise = modo_analise
+
+    if st.session_state.get('loaded_excel_bytes') is not None and st.session_state.get('loaded_ibge_bytes') is not None:
+        pass 
     else:
         st.title("🗺️ Simulador de Malha Logística")
         st.info("👈 Por favor, importe os dados na barra lateral à esquerda para iniciar a análise.")
@@ -586,48 +631,48 @@ st.sidebar.markdown("---")
 st.sidebar.title("Filtros e Configurações")
 expandir_mapa = st.sidebar.checkbox("⛶ Layout Amplo das Abas", value=False, help="Remove as métricas laterais para dar mais espaço à tabela.")
 
-# FILTRO 1: CIDADES (MULTISELECT)
+# FILTRO 1: CIDADES (SELECTBOX ÚNICO)
 cidades_disponiveis = sorted(df_vol['Cidade'].unique())
-cidades_salvas = st.session_state.get('cidades_selecionadas_backup', [])
-if cidades_salvas:
-    cidades_padrao = [c for c in cidades_salvas if c in cidades_disponiveis]
+cidade_salva = st.session_state.get('cidade_selecionada_backup')
+if cidade_salva in cidades_disponiveis:
+    cidade_padrao = cidades_disponiveis.index(cidade_salva)
 else:
-    cidades_padrao = ["Rio de Janeiro"] if "Rio de Janeiro" in cidades_disponiveis else ([cidades_disponiveis[0]] if cidades_disponiveis else [])
+    cidade_padrao = cidades_disponiveis.index("Rio de Janeiro") if "Rio de Janeiro" in cidades_disponiveis else 0
 
-cidades_selecionadas = st.sidebar.multiselect("📍 1. Selecione a Região/Cidade (Vazio = Todas):", cidades_disponiveis, default=cidades_padrao)
+cidade_selecionada = st.sidebar.selectbox("📍 1. Selecione a Região/Cidade", cidades_disponiveis, index=cidade_padrao)
 
-if 'cidades_selecionadas_prev' not in st.session_state:
-    st.session_state.cidades_selecionadas_prev = st.session_state.get('cidades_selecionadas_backup', cidades_selecionadas)
+if 'cidade_selecionada_prev' not in st.session_state:
+    st.session_state.cidade_selecionada_prev = st.session_state.get('cidade_selecionada_backup', cidade_selecionada)
 
-if st.session_state.cidades_selecionadas_prev != cidades_selecionadas:
+if st.session_state.cidade_selecionada_prev != cidade_selecionada:
     st.session_state.regras_simulacao = []
     if 'ia_resultado' in st.session_state:
         del st.session_state['ia_resultado']
     if 'bases_ativas_ia_prev' in st.session_state:
         st.session_state.bases_ativas_ia_prev = []
-    st.session_state.cidades_selecionadas_prev = cidades_selecionadas
+    st.session_state.cidade_selecionada_prev = cidade_selecionada
 
-if cidades_selecionadas:
-    df_base_tmp = df_vol[df_vol['Cidade'].isin(cidades_selecionadas)].copy()
-else:
-    df_base_tmp = df_vol.copy()
+df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
+gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
-# A detecção do UF Global deve ser feita após definir a df_base_tmp
-cep_amostra_global = df_base_tmp[COLUNA_CEP].iloc[0] if not df_base_tmp.empty else "00000000"
+# A detecção do UF Global deve ser feita na cidade selecionada
+cep_amostra_global = df_cidade_full[COLUNA_CEP].iloc[0] if not df_cidade_full.empty else "00000000"
 uf_automatica = descobrir_uf_pelo_cep(cep_amostra_global)
 
 # FILTRO 2: BAIRROS (MULTISELECT)
-bairros_da_cidade = sorted(df_base_tmp['Bairro'].unique())
+bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
+lbl_filtro = "🏘️ 2. Filtrar Cidades (Opcional):" if st.session_state.modo_analise != "🏙️ Intra-Município (Por Bairros)" else "🏘️ 2. Filtrar Bairro(s) (Opcional):"
+
 bairros_salvos = st.session_state.get('bairros_selecionados_backup', [])
 bairros_padrao = [b for b in bairros_salvos if b in bairros_da_cidade]
 
-bairros_selecionados = st.sidebar.multiselect("🏘️ 2. Filtrar Bairro(s) (Vazio = Todos):", bairros_da_cidade, default=bairros_padrao)
+bairros_selecionados = st.sidebar.multiselect(lbl_filtro, bairros_da_cidade, default=bairros_padrao)
 
-if bairros_selecionados: 
-    df_base_tmp = df_base_tmp[df_base_tmp['Bairro'].isin(bairros_selecionados)].copy()
+if bairros_selecionados: df_cidade_orig = df_cidade_full[df_cidade_full['Bairro'].isin(bairros_selecionados)].copy()
+else: df_cidade_orig = df_cidade_full.copy()
 
 # FILTRO 3: PARCEIROS (INDEPENDENTE)
-transp_locais = set(df_base_tmp['Transportadora'].unique())
+transp_locais = set(df_cidade_orig['Transportadora'].unique())
 transp_simuladas = set([r['destino'] for r in st.session_state.regras_simulacao])
 if 'ia_resultado' in st.session_state:
     transp_simuladas.update([r['destino'] for r in st.session_state.ia_resultado])
@@ -645,16 +690,15 @@ transp_selecionadas_sidebar = st.sidebar.multiselect(
 parceiros_adicionais = [p for p in transp_selecionadas_sidebar if p not in transp_locais]
 if parceiros_adicionais:
     df_extras = df_vol[df_vol['Transportadora'].isin(parceiros_adicionais)]
-    df_cidade_orig = pd.concat([df_base_tmp, df_extras]).drop_duplicates(subset=['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])
-else:
-    df_cidade_orig = df_base_tmp.copy()
+    df_cidade_orig = pd.concat([df_cidade_orig, df_extras]).drop_duplicates(subset=['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
 # Recorte Geométrico usando a Chave Robusta
 cidades_mapa = df_cidade_orig['Join_Cidade'].unique()
 bairros_mapa = df_cidade_orig['Join_Bairro'].unique()
-gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa) & gdf['Join_Bairro'].isin(bairros_mapa)]
+# Garantindo que o gdf também contém a cidade base para evitar bugs se faltar o polígono de parceiros independentes
+gdf_cidade = gdf[gdf['Join_Cidade'].isin(cidades_mapa)]
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
 bairros_ibge = set(gdf_cidade['Chave_Local'])
@@ -937,7 +981,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = transp_ativas
+        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
         
         for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
@@ -956,7 +1000,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     st.caption("∞ (Ilimitado)")
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -989,42 +1033,11 @@ st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápi
 
 @st.cache_data(show_spinner=False)
 def get_city_coords(cidade, uf):
-    cidade_limpa = limpa_texto(cidade)
-    fallback_map = {
-        "GOIANIA": (-16.6869, -49.2648),
-        "APARECIDA DE GOIANIA": (-16.8225, -49.2458),
-        "SENADOR CANEDO": (-16.7086, -49.0961),
-        "RIO DE JANEIRO": (-22.9068, -43.1729),
-        "TERESOPOLIS": (-22.4122, -42.9653),
-        "BARRA DO PIRAI": (-22.4711, -43.8247),
-        "NOVA FRIBURGO": (-22.2819, -42.5311),
-        "BRASILIA": (-15.7801, -47.9292),
-        "FORTALEZA": (-3.7172, -38.5433),
-        "SALVADOR": (-12.9714, -38.5014),
-        "LAURO DE FREITAS": (-12.8944, -38.3272),
-        "CAMACARI": (-12.6975, -38.3241),
-        "SIMOES FILHO": (-12.7844, -38.4044),
-        "SAO PAULO": (-23.5505, -46.6333)
-    }
-    if cidade_limpa in fallback_map:
-        return fallback_map[cidade_limpa]
-        
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
     query = f"{cidade}, {uf}, Brasil"
     res = buscar_coordenadas(query)
     if res: return res
-    res = buscar_coordenadas(f"{cidade}, Brasil")
-    if res: return res
-    
-    uf_coords = {
-        "GO": (-16.6869, -49.2648),
-        "RJ": (-22.9068, -43.1729),
-        "SP": (-23.5505, -46.6333),
-        "DF": (-15.7801, -47.9292),
-        "MT": (-15.6014, -56.0974),
-        "BA": (-12.9714, -38.5014),
-        "CE": (-3.7172, -38.5433)
-    }
-    return uf_coords.get(uf, (-15.7801, -47.9292))
+    return buscar_coordenadas(f"{cidade}, Brasil")
 
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
@@ -1059,10 +1072,10 @@ def extrair_pontos_bairros(_gdf_cidade):
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
-# Apenas para o Algoritmo da IA conseguir traçar a linha reta ou usar de fallback de erro
-def extrair_centroides_ia(gdf_cidade_local):
+# Apenas para o Algoritmo da IA e Fallback de Cabeças de CEP
+def extrair_centroides_ia(_gdf_cidade):
     dict_centroids = {}
-    for _, row in gdf_cidade_local.iterrows():
+    for _, row in _gdf_cidade.iterrows():
         if pd.notnull(row['geometry']):
             dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
     return dict_centroids
@@ -1162,7 +1175,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             avg_lat = sum(c[0] for c in coords_set) / len(coords_set)
             avg_lon = sum(c[1] for c in coords_set) / len(coords_set)
             dict_cabeca_cep_coords[cab] = (avg_lat, avg_lon)
-
+            
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -1184,7 +1197,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
         cidade_nome = row_ref[idx_cidade]
         cabeca_cep_val = row_ref[idx_cabeca_cep]
         
-        # Recupera as posições do cep e cria o fallback geográfico para polígonos faltantes
+        # 1. Tenta plotar dentro do Polígono real (se o bairro existir no IBGE)
         if chave_id in dict_bairros_pontos_espalhados:
             valid_points = dict_bairros_pontos_espalhados[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1195,7 +1208,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             lat_center += (((h_cep % 100) / 100.0) - 0.5) * 0.006
             lon_center += ((((h_cep // 100) % 100) / 100.0) - 0.5) * 0.006
         else:
-            # Bairro não encontrado na malha do IBGE: Fallback Inteligente pela Cabeça de CEP
+            # 2. Bairro não encontrado no IBGE: Fallback Inteligente pela Cabeça de CEP
             if cabeca_cep_val in dict_cabeca_cep_coords:
                 lat_anchor, lon_anchor = dict_cabeca_cep_coords[cabeca_cep_val]
                 
@@ -1206,7 +1219,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
                 lon_anchor += rng_bairro.uniform(-0.002, 0.002)
                 
             else:
-                # Fallback Extremo: Se nem a cabeça de CEP existir em nenhum lugar do mapa
+                # 3. Fallback Extremo: Se a cabeça de CEP também for completamente desconhecida
                 coord_cidade = dict_fallback.get(cidade_nome)
                 if not coord_cidade:
                     coord_cidade = get_city_coords(cidade_nome, uf_estado)
@@ -1215,17 +1228,17 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
                     lat_cid, lon_cid = coord_cidade
                     h_bairro = int(hashlib.md5(chave_id.encode()).hexdigest(), 16)
                     rng_bairro = np.random.RandomState(h_bairro % (2**32 - 1))
-                    # Raio reduzido para não voar para bairros adjacentes
-                    lat_anchor = lat_cid + rng_bairro.uniform(-0.005, 0.005)
-                    lon_anchor = lon_cid + rng_bairro.uniform(-0.005, 0.005)
+                    # Raio curtíssimo para que não voem para dentro de bairros gigantes (ex: Pituba)
+                    lat_anchor = lat_cid + rng_bairro.uniform(-0.004, 0.004)
+                    lon_anchor = lon_cid + rng_bairro.uniform(-0.004, 0.004)
                 else:
                     lat_anchor, lon_anchor = cy, cx
             
-            # Espalhamento dos CEPs deste bairro ao redor de sua âncora
+            # Espalhamento dos CEPs específicos ao redor da âncora estabelecida
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
-            lat_center = lat_anchor + rng_cep.normal(0, 0.0015)
-            lon_center = lon_anchor + rng_cep.normal(0, 0.0015)
+            lat_center = lat_anchor + rng_cep.normal(0, 0.0010)
+            lon_center = lon_anchor + rng_cep.normal(0, 0.0010)
             
         qtd_real = len(rows)
         qtd_bases = row_ref[idx_qtd_bases]
@@ -1247,11 +1260,11 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, uf_estado, dict_fallb
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                # Espalhamento orgânico muito mais leve visualmente para parceiros no mesmo CEP
+                # Substitui as "flores perfeitas" por um agrupamento orgânico muito mais limpo visualmente
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
-                lat_pino = lat_center + rng_pino.normal(0, 0.0003)
-                lon_pino = lon_center + rng_pino.normal(0, 0.0003)
+                lat_pino = lat_center + rng_pino.normal(0, 0.00025)
+                lon_pino = lon_center + rng_pino.normal(0, 0.00025)
                 markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
 
     # INJEÇÃO JS NATIVA USANDO FOLIUM.ELEMENT 
@@ -1325,10 +1338,7 @@ if not df_changed_sim.empty:
 else:
     df_changed_sim = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
 
-if cidades_selecionadas:
-    titulo_app = ", ".join(cidades_selecionadas[:3]) + ("..." if len(cidades_selecionadas) > 3 else "")
-else:
-    titulo_app = "Toda a Região (Estado)"
+titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
 with col_t:
@@ -1345,7 +1355,7 @@ with col_btn:
         'ia_resultado': st.session_state.get('ia_resultado', []),
         'de_para_bairros': st.session_state.get('de_para_bairros', {}),
         'modo_analise': st.session_state.get('modo_analise', '🏙️ Intra-Município (Por Bairros)'),
-        'cidades_selecionadas_backup': cidades_selecionadas,
+        'cidade_selecionada_backup': cidade_selecionada,
         'bairros_selecionados_backup': bairros_selecionados
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
@@ -1358,12 +1368,10 @@ with col_btn:
         
     zip_data = buf.getvalue()
 
-    nome_arquivo_backup = f"Backup_Malha_{limpa_texto(cidades_selecionadas[0]) if cidades_selecionadas else 'Completa'}.zip"
-
     st.download_button(
         label="💾 Salvar Estado da Análise",
         data=zip_data,
-        file_name=nome_arquivo_backup,
+        file_name=f"Backup_Malha_{limpa_texto(cidade_selecionada)}.zip",
         mime="application/zip",
         use_container_width=True
     )
@@ -1388,25 +1396,20 @@ if missing_cities:
             coord = get_city_coords(cid, uf_automatica)
             dict_fallback_coords[cid] = coord
 
-# Ajuste da centralização do mapa priorizando o Polígono, ou o Fallback do Satélite / Estado
+# Ajuste da centralização do mapa priorizando o Polígono
 if not gdf_cidade.empty:
     cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
 else:
-    valid_coords = [c for c in dict_fallback_coords.values() if c]
-    if valid_coords:
-        cy = np.mean([c[0] for c in valid_coords])
-        cx = np.mean([c[1] for c in valid_coords])
-    else:
-        # Fallback de centro de acordo com o Estado detectado
-        uf_defaults = {
-            "GO": (-16.6869, -49.2648),
-            "RJ": (-22.9068, -43.1729),
-            "SP": (-23.5505, -46.6333),
-            "DF": (-15.7801, -47.9292),
-            "CE": (-3.7172, -38.5433),
-            "BA": (-12.9714, -38.5014)
-        }
-        cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
+    # Fallback de centro de acordo com o Estado detectado
+    uf_defaults = {
+        "GO": (-16.6869, -49.2648),
+        "RJ": (-22.9068, -43.1729),
+        "SP": (-23.5505, -46.6333),
+        "DF": (-15.7801, -47.9292),
+        "CE": (-3.7172, -38.5433),
+        "BA": (-12.9714, -38.5014)
+    }
+    cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
 
 zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8
 
@@ -2016,13 +2019,14 @@ with aba3:
                 st.download_button(
                     label="📊 Baixar Relatório Completo (Análise Completa.xlsx)",
                     data=exportar_excel_formatado(dict_completo),
-                    file_name=f"Analise_Completa_{limpa_texto(cidades_selecionadas[0]) if cidades_selecionadas else 'Global'}.xlsx",
+                    file_name=f"Analise_Completa_{limpa_texto(cidade_selecionada)}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary"
                 )
             
     else:
         st.error(f"Falha ao carregar a base do Estado {uf_automatica}. Verifique se o arquivo compactado subiu corretamente para o GitHub.")
+
 
 # ---------------------------------------------------------
 # RENDERIZAÇÃO DO DIAGNÓSTICO (Final da barra lateral)

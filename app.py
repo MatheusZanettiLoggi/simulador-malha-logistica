@@ -132,7 +132,7 @@ def gerar_tabela(df_cidade_tabela):
     linha_total = pd.DataFrame({'Transportadora': ['TOTAL'], 'Volume': [total_vol], 'Vol / Dia': [round(total_vol/dias_analise)], '%': ['100.0%']})
     return pd.concat([vol_tabela, linha_total], ignore_index=True)
 
-def gerar_tabela_detalhada(df_cidade_tabela):
+def gerar_tabela_detalhada(df_cidade_tabela, rotulo_local):
     if df_cidade_tabela.empty:
         return pd.DataFrame()
     df_valid = df_cidade_tabela[df_cidade_tabela['Transportadora'] != TAG_MISSORTING]
@@ -735,18 +735,18 @@ def deve_pedir_capacidade(nome_base):
     nome_lower = str(nome_base).lower()
     return not (nome_lower.startswith("agf") or nome_lower.startswith("correios") or nome_lower == "regiões sem capacidade")
 
-bases_sem_coord = [b for b in todas_transp_globais if b not in st.session_state.coords_bases and b not in st.session_state.bases_ignoradas and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
+bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
 if bases_sem_coord or st.session_state.erros_geocoding:
-    st.title(f"📍 Configuração de Bases (Global)")
-    st.info("Para liberar o dashboard, insira o endereço de todas as bases presentes no arquivo. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação na análise.")
+    st.title(f"📍 Configuração de Bases")
+    st.info("Para liberar o dashboard, insira o endereço de cada base. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação da base na análise.")
     
     novos_enderecos = {}
     novas_capacidades = {}
     cols = st.columns(2)
     idx_col = 0
     
-    for base in todas_transp_globais:
-        if base == TAG_MISSORTING or base == 'Regiões sem capacidade' or base in st.session_state.bases_ignoradas: continue
+    for base in transp_ativas:
+        if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
         with cols[idx_col % 2]:
             st.markdown(f"**🏢 Sede: {base}**")
             if f"input_end_{base}" not in st.session_state:
@@ -838,6 +838,63 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                 st.session_state.enderecos_bases[b_err] = "Centro da Região (Fallback)"
             st.session_state.erros_geocoding = []
             st.rerun()
+            
+    st.markdown("---")
+    st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
+    
+    dict_locais = {}
+    for _, row in gdf_bairros_ativos.drop_duplicates(subset=['NM_BAIRRO_STR']).iterrows():
+        nome = str(row['NM_BAIRRO_STR'])
+        if nome.strip() == "": continue
+        mun = str(row['NM_MUN']) if 'NM_MUN' in row else ""
+        display_name = f"{nome} - {mun}" if mun else f"{nome}"
+        dict_locais[display_name] = row['Chave_Local']
+
+    opcoes_locais = ["-- Visão Geral do Mapa --"] + list(dict_locais.keys())
+    label_busca = "🔍 Buscar Município para focar no mapa:" if len(cidades_selecionadas) > 1 else "🔍 Buscar Bairro para focar no mapa:"
+    
+    local_foco_display = st.selectbox(label_busca, opcoes_locais)
+
+    if local_foco_display == "-- Visão Geral do Mapa --":
+        cy_helper = gdf_bairros_ativos.geometry.centroid.y.mean() if not gdf_bairros_ativos.empty else -22.9068
+        cx_helper = gdf_bairros_ativos.geometry.centroid.x.mean() if not gdf_bairros_ativos.empty else -43.1729
+        zoom_helper = 8 if len(cidades_selecionadas) > 1 else 11
+        gdf_foco = gpd.GeoDataFrame()
+    else:
+        chave_real = dict_locais[local_foco_display]
+        gdf_foco = gdf_bairros_ativos[gdf_bairros_ativos['Chave_Local'] == chave_real]
+        if not gdf_foco.empty:
+            cy_helper = gdf_foco.geometry.centroid.y.mean()
+            cx_helper = gdf_foco.geometry.centroid.x.mean()
+            zoom_helper = 12 if len(cidades_selecionadas) > 1 else 14
+        else:
+            cy_helper = gdf_bairros_ativos.geometry.centroid.y.mean()
+            cx_helper = gdf_bairros_ativos.geometry.centroid.x.mean()
+            zoom_helper = 8
+
+    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
+    Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
+    
+    if not gdf_bairros_ativos.empty:
+        folium.GeoJson(
+            gdf_bairros_ativos, 
+            style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
+            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
+        ).add_to(m_helper)
+    
+    if not gdf_foco.empty:
+        folium.GeoJson(
+            gdf_foco,
+            style_function=lambda x: {'fillColor': '#f1c40f', 'color': '#f1c40f', 'weight': 2, 'fillOpacity': 0.6},
+            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local Destacado:'], style="background-color: white; color: #333; padding: 5px;")
+        ).add_to(m_helper)
+    
+    map_data = st_folium(m_helper, height=350, width=800, key="mapa_auxiliar")
+    
+    if map_data and map_data.get("last_clicked"):
+        lat_c = map_data["last_clicked"]["lat"]
+        lng_c = map_data["last_clicked"]["lng"]
+        st.success(f"📍 **Coordenada Capturada:** `{lat_c}, {lng_c}` (Copie e cole na caixa da base)")
     st.stop()
 
 st.sidebar.markdown("---")
@@ -845,7 +902,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
+        todas_bases_projeto = transp_ativas
         
         for base in todas_bases_projeto:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
@@ -864,7 +921,7 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     st.caption("∞ (Ilimitado)")
             
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -913,6 +970,7 @@ def extrair_pontos_bairros(_gdf_cidade):
             pts = []
             minx, miny, maxx, maxy = geom.bounds
             
+            # Semente fixa para que os bairros não mudem de posição a cada F5
             h_bairro = int(hashlib.md5(b_id.encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_bairro % (2**32 - 1))
             
@@ -921,6 +979,7 @@ def extrair_pontos_bairros(_gdf_cidade):
                 rx = rng.uniform(minx, maxx)
                 ry = rng.uniform(miny, maxy)
                 pnt = Point(rx, ry)
+                # Verifica rigorosamente se o ponto não caiu no mar ou bairro vizinho
                 if geom.contains(pnt):
                     pts.append((ry, rx))
                 attempts += 1
@@ -935,18 +994,28 @@ def extrair_pontos_bairros(_gdf_cidade):
 # Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_bairros_ativos)
 
+# Apenas para o Algoritmo da IA e Fallback de Cabeças de CEP
+def extrair_centroides_ia(_gdf_cidade):
+    dict_centroids = {}
+    for _, row in _gdf_cidade.iterrows():
+        if pd.notnull(row['geometry']):
+            dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+    return dict_centroids
+
+dict_bairros_centroides = extrair_centroides_ia(gdf_bairros_ativos)
+
 @st.cache_data
 def prepara_mapa_pontos(df_cenario):
-    df_pontos = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
+    df_pontos = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
         Volume=('Volume', 'sum')
     ).reset_index()
     
-    df_agrupado = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
+    df_agrupado = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP]).agg(
         Qtd_Bases=('Transportadora', 'nunique'),
         Parceiros=('Transportadora', lambda x: ' + '.join(sorted(x.unique())))
     ).reset_index()
     
-    return pd.merge(df_pontos, df_agrupado, on=['Chave_Local', 'Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
+    return pd.merge(df_pontos, df_agrupado, on=['Chave_Local', 'Cidade', 'Join_Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], how='left')
 
 def get_visibilidade(transp):
     if transp == 'Sem Dados': return True
@@ -1139,7 +1208,7 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.00025)
                 lon_pino = lon_center + rng_pino.normal(0, 0.00025)
-                markers_data.append([lat_pino, lon_pino, cor, 4, html_tooltip])
+                markers_data.append([lat_pino, lon_pino, cor, 3, html_tooltip])
 
     FastCircleMarkers(json.dumps(markers_data)).add_to(m)
 
@@ -1704,7 +1773,7 @@ with aba3:
             for _, row in df_cidade_oficial.iterrows():
                 if row['prefixo'] > 0:
                     prefix_to_mun[row['prefixo']] = row['municipio_limpo']
-                    
+                        
             for mun, max_pref in max_prefix_mun.items():
                 if max_pref == 0: continue
                 base_dezena = (max_pref // 10) * 10
@@ -1737,7 +1806,7 @@ with aba3:
                 with st.expander("🚨 Ver lista de CEPs Compartilhados"):
                     st.dataframe(df_shared, use_container_width=True, hide_index=True)
             
-            def aplicar_mapeamento_correios(df_oficial, df_referencia, chave_bairro):
+            def aplicar_mapeamento_correios(df_oficial, df_referencia):
                 df_res = df_oficial.copy()
                 df_ref_safe = df_referencia.copy()
                 
@@ -1771,7 +1840,7 @@ with aba3:
                 df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Match', 'Chave_Cabeca_res', 'Chave_CEP_res'])
                 return df_res
             
-            df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig, chave_oficial)
+            df_oficial_orig = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_orig)
             df_oficial_orig = df_oficial_orig[df_oficial_orig['Transportadora'] != 'Sem Atendimento']
             
             df_range_orig = gerar_ranges_cep(df_oficial_orig, dict_limites=limites_expandidos, is_regional=True)
@@ -1788,7 +1857,7 @@ with aba3:
                 st.markdown("---")
                 st.markdown("#### 2. Cenário Simulado (Manual vs Correios)")
                 
-                df_oficial_sim = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_sim, chave_oficial)
+                df_oficial_sim = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_sim)
                 df_oficial_sim = df_oficial_sim[df_oficial_sim['Transportadora'] != 'Sem Atendimento']
                 
                 df_range_sim = gerar_ranges_cep(df_oficial_sim, dict_limites=limites_expandidos, is_regional=True)
@@ -1805,7 +1874,7 @@ with aba3:
                     st.markdown("---")
                     st.markdown("#### 3. Cenário IA (Roteirização Inteligente vs Correios)")
                     
-                    df_oficial_ia = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_ia_temp, chave_oficial)
+                    df_oficial_ia = aplicar_mapeamento_correios(df_cidade_oficial, df_cidade_ia_temp)
                     df_oficial_ia = df_oficial_ia[df_oficial_ia['Transportadora'] != 'Sem Atendimento']
                     
                     df_range_ia = gerar_ranges_cep(df_oficial_ia, dict_limites=limites_expandidos, is_regional=True)

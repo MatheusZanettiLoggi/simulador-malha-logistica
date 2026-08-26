@@ -568,11 +568,10 @@ st.sidebar.title("Filtros e Configurações")
 expandir_mapa = st.sidebar.checkbox("⛶ Layout Amplo das Abas", value=False)
 
 # -------------------------------------------------------------
-# FILTRO 1: CIDADES (MULTISELECT) - Resolvido padrão de "Aparecida"
+# FILTRO 1: CIDADES (MULTISELECT) - Exibe todo o mapa por padrão
 # -------------------------------------------------------------
 cidades_disponiveis = sorted([str(x) for x in df_vol['Cidade'].unique() if str(x) != 'nan'])
 cidades_salvas = st.session_state.get('cidades_selecionadas_backup', [])
-# Se não houver backup, deixamos a lista VAZIA, para que PLOTE TUDO (Visão Regional)
 cidades_padrao = [c for c in cidades_salvas if c in cidades_disponiveis]
 
 cidades_selecionadas = st.sidebar.multiselect("📍 1. Filtrar Município(s) (Vazio = Todos):", cidades_disponiveis, default=cidades_padrao)
@@ -637,28 +636,6 @@ df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.sessio
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
 bairros_ibge = set(gdf_bairros_ativos['Chave_Local'])
-divergentes = bairros_planilha - bairros_ibge
-
-# -------------------------------------------------------------
-# AUTO-CORREÇÃO COM LIMPEZA DE CACHE PARA EVITAR LOOP INFINITO
-# -------------------------------------------------------------
-houve_auto_fix = False
-for div in list(divergentes):
-    cidade_div, bairro_div = div.split('_', 1) if '_' in div else ("", div)
-    opcoes_bairros_cidade = [b.split('_', 1)[1] for b in bairros_ibge if b.startswith(cidade_div + '_')]
-    sugestao = difflib.get_close_matches(bairro_div, opcoes_bairros_cidade, n=1, cutoff=0.90)
-    if sugestao:
-        nomes_originais = df_cidade_orig[df_cidade_orig['Chave_Local'] == div]['Bairro'].unique()
-        for n_orig in nomes_originais:
-            st.session_state.de_para_bairros[n_orig] = sugestao[0]
-        houve_auto_fix = True
-        
-if houve_auto_fix:
-    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
-        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
-    otimizar_base_global.clear()
-    st.rerun()
-
 divergentes = bairros_planilha - bairros_ibge
 
 if divergentes:
@@ -1003,7 +980,6 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, cx, zoom, uf_estado, dict_fallback, pinos_bases=None, expandido=False):
-    # A URL explícita evita a marca d'água "API KEY REQUIRED"
     tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
     
@@ -1055,22 +1031,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
                 if pd.notnull(geom_mun):
                     city_polygons[cid] = geom_mun
 
-    cabeca_to_coords = {}
-    for row in df_pontos.itertuples(index=False):
-        chave = row[idx_chave_local]
-        cab = row[idx_cabeca_cep]
-        if chave in dict_bairros_centroides:
-            if cab not in cabeca_to_coords:
-                cabeca_to_coords[cab] = set()
-            cabeca_to_coords[cab].add(dict_bairros_centroides[chave])
-            
-    dict_cabeca_cep_coords = {}
-    for cab, coords_set in cabeca_to_coords.items():
-        if coords_set:
-            avg_lat = sum(c[0] for c in coords_set) / len(coords_set)
-            avg_lon = sum(c[1] for c in coords_set) / len(coords_set)
-            dict_cabeca_cep_coords[cab] = (avg_lat, avg_lon)
-
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
@@ -1098,41 +1058,38 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             lat_center, lon_center = valid_points[h_cep % len(valid_points)]
         else:
-            if cabeca_cep_val in dict_cabeca_cep_coords:
-                lat_anchor, lon_anchor = dict_cabeca_cep_coords[cabeca_cep_val]
+            if join_cidade_val in city_polygons:
+                geom_mun = city_polygons[join_cidade_val]
+                minx, miny, maxx, maxy = geom_mun.bounds
+                
+                h_cab = int(hashlib.md5(str(cabeca_cep_val).encode()).hexdigest(), 16)
+                rng_cab = np.random.RandomState(h_cab % (2**32 - 1))
+                
+                lat_anchor, lon_anchor = None, None
+                for _ in range(50):
+                    rx = rng_cab.uniform(minx, maxx)
+                    ry = rng_cab.uniform(miny, maxy)
+                    pnt = Point(rx, ry)
+                    if geom_mun.contains(pnt):
+                        lat_anchor, lon_anchor = ry, rx
+                        break
+                
+                if lat_anchor is None:
+                    rep = geom_mun.representative_point()
+                    lat_anchor, lon_anchor = rep.y, rep.x
             else:
-                if join_cidade_val in city_polygons:
-                    geom_mun = city_polygons[join_cidade_val]
-                    minx, miny, maxx, maxy = geom_mun.bounds
-                    
+                coord_cidade = dict_fallback.get(cidade_nome)
+                if not coord_cidade:
+                    coord_cidade = get_city_coords(cidade_nome, uf_estado)
+                
+                if coord_cidade:
+                    lat_cid, lon_cid = coord_cidade
                     h_cab = int(hashlib.md5(str(cabeca_cep_val).encode()).hexdigest(), 16)
                     rng_cab = np.random.RandomState(h_cab % (2**32 - 1))
-                    
-                    lat_anchor, lon_anchor = None, None
-                    for _ in range(50):
-                        rx = rng_cab.uniform(minx, maxx)
-                        ry = rng_cab.uniform(miny, maxy)
-                        pnt = Point(rx, ry)
-                        if geom_mun.contains(pnt):
-                            lat_anchor, lon_anchor = ry, rx
-                            break
-                    
-                    if lat_anchor is None:
-                        rep = geom_mun.representative_point()
-                        lat_anchor, lon_anchor = rep.y, rep.x
+                    lat_anchor = lat_cid + rng_cab.uniform(-0.04, 0.04)
+                    lon_anchor = lon_cid + rng_cab.uniform(-0.04, 0.04)
                 else:
-                    coord_cidade = dict_fallback.get(cidade_nome)
-                    if not coord_cidade:
-                        coord_cidade = get_city_coords(cidade_nome, uf_estado)
-                    
-                    if coord_cidade:
-                        lat_cid, lon_cid = coord_cidade
-                        h_cab = int(hashlib.md5(str(cabeca_cep_val).encode()).hexdigest(), 16)
-                        rng_cab = np.random.RandomState(h_cab % (2**32 - 1))
-                        lat_anchor = lat_cid + rng_cab.uniform(-0.04, 0.04)
-                        lon_anchor = lon_cid + rng_cab.uniform(-0.04, 0.04)
-                    else:
-                        lat_anchor, lon_anchor = cy, cx
+                    lat_anchor, lon_anchor = cy, cx
             
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
@@ -1732,7 +1689,7 @@ with aba3:
             for _, row in df_cidade_oficial.iterrows():
                 if row['prefixo'] > 0:
                     prefix_to_mun[row['prefixo']] = row['municipio_limpo']
-                    
+                        
             for mun, max_pref in max_prefix_mun.items():
                 if max_pref == 0: continue
                 base_dezena = (max_pref // 10) * 10

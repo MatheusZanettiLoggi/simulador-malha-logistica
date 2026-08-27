@@ -436,7 +436,7 @@ else:
             st.rerun()
         st.stop()
 
-# --- CARREGAMENTO INICIAL DE DADOS ---
+# --- DADOS INICIAIS ---
 with timer("1. Carregamento de Base e Geometria"):
     excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
     map_bairros_io = io.BytesIO(st.session_state.loaded_ibge_bairros_bytes)
@@ -545,7 +545,7 @@ gdf_bairros_ativos = gdf_bairros[gdf_bairros['Chave_Local'].isin(bairros_ativos_
 gdf_municipios_ativos = gdf_municipios[gdf_municipios['Join_Cidade'].isin(cidades_ativas_mapa)]
 
 # -------------------------------------------------------------
-# CORREÇÃO DE DIVERGÊNCIAS
+# CORREÇÃO DE DIVERGÊNCIAS (FUZZY MATCH BLINDADO)
 # -------------------------------------------------------------
 bairros_planilha = set(bairros_ativos_mapa)
 bairros_ibge_full = set(gdf_bairros['Chave_Local'])
@@ -566,6 +566,7 @@ for div in list(divergentes):
 if houve_auto_fix:
     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+    otimizar_base_global.clear()
     st.rerun()
 
 divergentes = bairros_planilha - bairros_ibge_full
@@ -604,6 +605,7 @@ if divergentes:
                 if bairro_planilha_sug != "-- Selecione --":
                     st.session_state.de_para_bairros[bairro_planilha_sug] = nome_ibge_limpo
                     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f: json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+                    otimizar_base_global.clear()
                     st.rerun()
 
 df_cidade_sim = df_cidade_orig.copy()
@@ -783,7 +785,7 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# --- LÓGICA GEOGRÁFICA PRINCIPAL ---
+# --- PREPARAÇÃO DO MAPA CIENTÍFICO (NUVEM DE DISPERSÃO ORGÂNICA SEM CACHE DE GEOMETRIA) ---
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     for _, row in _gdf_cidade.iterrows():
@@ -792,8 +794,10 @@ def extrair_pontos_bairros(_gdf_cidade):
             b_id = row['Chave_Local']
             pts = []
             minx, miny, maxx, maxy = geom.bounds
+            
             h_bairro = int(hashlib.md5(b_id.encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_bairro % (2**32 - 1))
+            
             attempts = 0
             while len(pts) < 15 and attempts < 150:
                 rx = rng.uniform(minx, maxx)
@@ -802,9 +806,11 @@ def extrair_pontos_bairros(_gdf_cidade):
                 if geom.contains(pnt):
                     pts.append((ry, rx))
                 attempts += 1
+            
             if not pts:
                 rep = geom.representative_point()
                 pts.append((rep.y, rep.x))
+                
             dict_pontos[b_id] = pts
     return dict_pontos
 
@@ -861,17 +867,17 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown("<br>", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# DESENHO DO MAPA PRINCIPAL
+# DESENHO DO MAPA PRINCIPAL (BLINDADO)
 # ---------------------------------------------------------
-def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, cx, zoom, uf_estado, dict_fallback_coords, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=None, expandido=False):
-    # Novo mapa ESRI oficial (Sem watermark)
+def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, cx, zoom, uf_estado, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=None, expandido=False):
+    # Fundo Limpo e Profissional (ESRI Dark)
     tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
     
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles=tiles_url, attr=attr, prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
-    # AUTO CENTER (FIT BOUNDS) BASEADO NOS POLÍGONOS ATIVOS
+    # AUTO CENTER DA CAMERA
     try:
         if not gdf_bairros_layer.empty:
             bounds = gdf_bairros_layer.total_bounds
@@ -951,14 +957,9 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
             if join_cidade_val in city_centroids:
                 lat_anchor, lon_anchor = city_centroids[join_cidade_val]
             else:
-                coord_cidade = dict_fallback_coords.get(cidade_nome)
-                if not coord_cidade: coord_cidade = get_city_coords(cidade_nome, uf_estado)
-                if coord_cidade:
-                    lat_anchor, lon_anchor = coord_cidade
-                else:
-                    lat_anchor, lon_anchor = cy, cx
+                lat_anchor, lon_anchor = cy, cx
 
-            # Espalhamento Secundário: Agrupa CEPs orgânicamente (Jitter maior)
+            # Espalhamento Secundário: Agrupa CEPs na Cidade sem Polígono
             h_cab = int(hashlib.md5(str(cabeca_cep_val).encode()).hexdigest(), 16)
             rng_cab = np.random.RandomState(h_cab % (2**32 - 1))
             lat_anchor += rng_cab.uniform(-0.025, 0.025)
@@ -1016,14 +1017,12 @@ with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
-# Auto-center fallback caso não tenha nada plotado na tela
+# Auto-center fallback
 if not gdf_bairros_ativos.empty: cy, cx = gdf_bairros_ativos.geometry.centroid.y.mean(), gdf_bairros_ativos.geometry.centroid.x.mean()
 elif not gdf_municipios_ativos.empty: cy, cx = gdf_municipios_ativos.geometry.centroid.y.mean(), gdf_municipios_ativos.geometry.centroid.x.mean()
 else:
     uf_defaults = {"GO": (-16.6869, -49.2648), "RJ": (-22.9068, -43.1729), "SP": (-23.5505, -46.6333), "DF": (-15.7801, -47.9292), "CE": (-3.7172, -38.5433), "BA": (-12.9714, -38.5014)}
     cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
-
-dict_fallback_coords = {}
 
 df_merged_sim = pd.merge(df_cidade_orig[['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']], df_cidade_sim[['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']], on=['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], suffixes=('_Atual', '_Simulado'))
 df_changed_sim = df_merged_sim[df_merged_sim['Transportadora_Atual'] != df_merged_sim['Transportadora_Simulado']].copy()
@@ -1083,7 +1082,6 @@ with aba1:
                 gdf_bairros_layer=gdf_bairros_ativos, 
                 gdf_municipios_layer=gdf_municipios_ativos, 
                 cy=cy, cx=cx, zoom=zoom_padrao, uf_estado=uf_automatica, 
-                dict_fallback_coords=dict_fallback_coords, 
                 dict_bairros_centroides=dict_bairros_centroides, 
                 dict_bairros_pontos_espalhados=dict_bairros_pontos_espalhados, 
                 pinos_bases=pinos_orig, expandido=expandir_mapa
@@ -1199,7 +1197,6 @@ with aba1:
                 gdf_bairros_layer=gdf_bairros_ativos, 
                 gdf_municipios_layer=gdf_municipios_ativos, 
                 cy=cy, cx=cx, zoom=zoom_padrao, uf_estado=uf_automatica, 
-                dict_fallback_coords=dict_fallback_coords, 
                 dict_bairros_centroides=dict_bairros_centroides, 
                 dict_bairros_pontos_espalhados=dict_bairros_pontos_espalhados, 
                 pinos_bases=pinos_sim, expandido=expandir_mapa
@@ -1385,7 +1382,6 @@ with aba2:
                         gdf_bairros_layer=gdf_bairros_ativos, 
                         gdf_municipios_layer=gdf_municipios_ativos, 
                         cy=cy, cx=cx, zoom=zoom_padrao, uf_estado=uf_automatica, 
-                        dict_fallback_coords=dict_fallback_coords, 
                         dict_bairros_centroides=dict_bairros_centroides, 
                         dict_bairros_pontos_espalhados=dict_bairros_pontos_espalhados, 
                         pinos_bases=pinos_ia, expandido=expandir_mapa

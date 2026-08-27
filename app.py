@@ -332,7 +332,41 @@ def load_dados(excel_file, zip_bairros, zip_municipios):
     
     return df_vol, gdf_bairros, gdf_municipios, qtd_dias
 
-# --- MAIN APP ---
+def aplicar_mapeamento_correios(df_oficial, df_referencia):
+    df_res = df_oficial.copy()
+    df_ref_safe = df_referencia.copy()
+    
+    df_ref_safe['CEP_Limpo'] = df_ref_safe[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+    df_res['CEP_Limpo'] = df_res[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str.zfill(8)
+    df_res['Cabeca_CEP_tmp'] = df_res['CEP_Limpo'].str[:5]
+    
+    df_ref_safe['Chave_Match'] = df_ref_safe['Cidade'].apply(limpa_texto) + "_" + df_ref_safe['Bairro'].apply(limpa_texto)
+    df_res['Chave_Match'] = df_res['municipio_limpo'] + "_" + df_res['bairro_limpo']
+    
+    map_bairro = df_ref_safe.groupby('Chave_Match')['Transportadora'].agg(lambda x: x.mode()[0] if not x.empty else np.nan).to_dict()
+    df_res['Transportadora'] = df_res['Chave_Match'].map(map_bairro)
+    
+    df_ref_safe['Chave_Cabeca'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['Cabeca_CEP']
+    map_cabeca = df_ref_safe.groupby('Chave_Cabeca')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_Cabeca_res'] = df_res['Chave_Match'] + "_" + df_res['Cabeca_CEP_tmp']
+    mask_cab = df_res['Chave_Cabeca_res'].isin(map_cabeca)
+    if mask_cab.any():
+        df_res.loc[mask_cab, 'Transportadora'] = df_res.loc[mask_cab, 'Chave_Cabeca_res'].map(map_cabeca)
+        
+    df_ref_safe['Chave_CEP'] = df_ref_safe['Chave_Match'] + "_" + df_ref_safe['CEP_Limpo']
+    map_cep = df_ref_safe.groupby('Chave_CEP')['Transportadora'].first().to_dict()
+    
+    df_res['Chave_CEP_res'] = df_res['Chave_Match'] + "_" + df_res['CEP_Limpo']
+    mask_cep = df_res['Chave_CEP_res'].isin(map_cep)
+    if mask_cep.any():
+        df_res.loc[mask_cep, 'Transportadora'] = df_res.loc[mask_cep, 'Chave_CEP_res'].map(map_cep)
+        
+    df_res['Transportadora'] = df_res['Transportadora'].fillna('Sem Atendimento')
+    df_res = df_res.drop(columns=['Cabeca_CEP_tmp', 'CEP_Limpo', 'Chave_Match', 'Chave_Cabeca_res', 'Chave_CEP_res'])
+    return df_res
+
+# --- MAIN APP ROUTING ---
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'
 
@@ -436,7 +470,7 @@ else:
             st.rerun()
         st.stop()
 
-# --- DADOS ---
+# --- DADOS INICIAIS ---
 with timer("1. Carregamento de Base e Geometria"):
     excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
     map_bairros_io = io.BytesIO(st.session_state.loaded_ibge_bairros_bytes)
@@ -450,7 +484,6 @@ ibge_name_map = {}
 if 'NM_BAIRRO_STR' in gdf_bairros.columns and 'Chave_Local' in gdf_bairros.columns:
     ibge_name_map = dict(zip(gdf_bairros['Chave_Local'], gdf_bairros['NM_BAIRRO_STR']))
 
-# --- INITS ---
 if 'regras_simulacao' not in st.session_state: st.session_state.regras_simulacao = []
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False
 if 'coords_bases' not in st.session_state: st.session_state.coords_bases = {}
@@ -489,7 +522,6 @@ expandir_mapa = st.sidebar.checkbox("⛶ Layout Amplo das Abas", value=False)
 
 cidades_disponiveis = sorted([str(x) for x in df_vol['Cidade'].unique() if str(x) != 'nan'])
 cidades_salvas = st.session_state.get('cidades_selecionadas_backup', [])
-
 cidades_padrao = [c for c in cidades_salvas if c in cidades_disponiveis]
 
 cidades_selecionadas = st.sidebar.multiselect("📍 1. Filtrar Município(s) (Vazio = Todos):", cidades_disponiveis, default=cidades_padrao)
@@ -503,13 +535,8 @@ if st.session_state.cidades_selecionadas_prev != cidades_selecionadas:
 
 if cidades_selecionadas:
     df_cidade_full = df_vol[df_vol['Cidade'].isin(cidades_selecionadas)].copy()
-    cidades_limpas = [limpa_texto(c) for c in cidades_selecionadas]
-    gdf_bairros_ativos = gdf_bairros[gdf_bairros['Join_Cidade'].isin(cidades_limpas)]
-    gdf_municipios_ativos = gdf_municipios[gdf_municipios['Join_Cidade'].isin(cidades_limpas)]
 else:
     df_cidade_full = df_vol.copy()
-    gdf_bairros_ativos = gdf_bairros.copy()
-    gdf_municipios_ativos = gdf_municipios.copy()
 
 cep_amostra_global = df_cidade_full[COLUNA_CEP].iloc[0] if not df_cidade_full.empty else "00000000"
 uf_automatica = descobrir_uf_pelo_cep(cep_amostra_global)
@@ -540,11 +567,22 @@ if parceiros_adicionais:
 
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
-bairros_planilha = set(df_cidade_orig['Chave_Local'])
+# -------------------------------------------------------------
+# LIMPEZA DOS MAPAS - FILTRA APENAS POLÍGONOS QUE EXISTEM NOS DADOS
+# -------------------------------------------------------------
+cidades_ativas_mapa = df_cidade_orig['Join_Cidade'].dropna().unique()
+bairros_ativos_mapa = df_cidade_orig['Chave_Local'].dropna().unique()
+
+gdf_bairros_ativos = gdf_bairros[gdf_bairros['Chave_Local'].isin(bairros_ativos_mapa)]
+gdf_municipios_ativos = gdf_municipios[gdf_municipios['Join_Cidade'].isin(cidades_ativas_mapa)]
+
+# -------------------------------------------------------------
+# CORREÇÃO DE DIVERGÊNCIAS (FUZZY MATCH BLINDADO)
+# -------------------------------------------------------------
+bairros_planilha = set(bairros_ativos_mapa)
 bairros_ibge_full = set(gdf_bairros['Chave_Local'])
 divergentes = bairros_planilha - bairros_ibge_full
 
-# Previne Loop Infinito de Correção de Cache
 houve_auto_fix = False
 for div in list(divergentes):
     cidade_div, bairro_div = div.split('_', 1) if '_' in div else ("", div)
@@ -562,8 +600,6 @@ if houve_auto_fix:
         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
     otimizar_base_global.clear()
     st.rerun()
-
-divergentes = bairros_planilha - bairros_ibge_full
 
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)", expanded=True):
@@ -779,8 +815,7 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-
-# --- MAPA CIENTÍFICO (SEM CACHE PARA EVITAR ERRO DE UNHASHABLE) ---
+# --- PREPARAÇÃO DO MAPA CIENTÍFICO (SEM CACHE DE GEOMETRIA) ---
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     for _, row in _gdf_cidade.iterrows():
@@ -863,6 +898,17 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
     
     m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles=tiles_url, attr=attr, prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
+
+    # AUTO CENTER (FIT BOUNDS) BASEADO NOS POLÍGONOS ATIVOS
+    try:
+        if not gdf_bairros_layer.empty:
+            bounds = gdf_bairros_layer.total_bounds
+            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+        elif not gdf_municipios_layer.empty:
+            bounds = gdf_municipios_layer.total_bounds
+            m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
+    except:
+        pass
 
     if not gdf_municipios_layer.empty:
         folium.GeoJson(

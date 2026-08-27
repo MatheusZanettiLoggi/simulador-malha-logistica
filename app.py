@@ -196,9 +196,27 @@ def buscar_coordenadas(endereco_busca):
     user_agent_dinamico = f"simulador_malha_logistica_req_{random.randint(10000, 99999)}"
     try:
         geolocator = Nominatim(user_agent=user_agent_dinamico)
-        location = geolocator.geocode(endereco_formatado, timeout=10)
+        location = geolocator.geocode(endereco_busca, timeout=10)
         if location: return (location.latitude, location.longitude)
     except: pass 
+    return None
+
+@st.cache_data(show_spinner=False)
+def get_cep_anchor(cabeca_cep, cidade, uf):
+    """Mapeia geograficamente o CEP direto no Satélite (Traz a Exatidão do Data Studio)"""
+    time.sleep(1.0)
+    user_agent_dinamico = f"sim_log_{random.randint(10000, 99999)}"
+    try:
+        geolocator = Nominatim(user_agent=user_agent_dinamico)
+        query = f"{cabeca_cep}-000, {cidade}, {uf}, Brasil"
+        loc = geolocator.geocode(query, timeout=10)
+        if loc: return (loc.latitude, loc.longitude)
+        
+        # Fallback para o município apenas se o CEP falhar
+        query2 = f"{cidade}, {uf}, Brasil"
+        loc2 = geolocator.geocode(query2, timeout=10)
+        if loc2: return (loc2.latitude, loc2.longitude)
+    except: pass
     return None
 
 @st.cache_data(show_spinner=False)
@@ -464,9 +482,6 @@ if 'de_para_bairros' not in st.session_state:
         with open(ARQUIVO_DE_PARA, 'r', encoding='utf-8') as f: st.session_state.de_para_bairros = json.load(f)
     else: st.session_state.de_para_bairros = {}
 
-if 'city_urban_centers' not in st.session_state:
-    st.session_state.city_urban_centers = {}
-
 if 'cores_transp' not in st.session_state:
     st.session_state.cores_transp = {}
     
@@ -507,13 +522,8 @@ if st.session_state.cidades_selecionadas_prev != cidades_selecionadas:
 
 if cidades_selecionadas:
     df_cidade_full = df_vol[df_vol['Cidade'].isin(cidades_selecionadas)].copy()
-    cidades_limpas = [limpa_texto(c) for c in cidades_selecionadas]
-    gdf_bairros_ativos = gdf_bairros[gdf_bairros['Join_Cidade'].isin(cidades_limpas)]
-    gdf_municipios_ativos = gdf_municipios[gdf_municipios['Join_Cidade'].isin(cidades_limpas)]
 else:
     df_cidade_full = df_vol.copy()
-    gdf_bairros_ativos = gdf_bairros.copy()
-    gdf_municipios_ativos = gdf_municipios.copy()
 
 cep_amostra_global = df_cidade_full[COLUNA_CEP].iloc[0] if not df_cidade_full.empty else "00000000"
 uf_automatica = descobrir_uf_pelo_cep(cep_amostra_global)
@@ -545,8 +555,26 @@ if parceiros_adicionais:
 df_cidade_orig = df_cidade_orig[~df_cidade_orig['Transportadora'].isin(st.session_state.bases_ignoradas)]
 
 bairros_planilha = set(df_cidade_orig['Chave_Local'])
-bairros_ibge = set(gdf_bairros_ativos['Chave_Local'])
-divergentes = bairros_planilha - bairros_ibge
+bairros_ibge_full = set(gdf_bairros['Chave_Local'])
+divergentes = bairros_planilha - bairros_ibge_full
+
+houve_auto_fix = False
+for div in list(divergentes):
+    cidade_div, bairro_div = div.split('_', 1) if '_' in div else ("", div)
+    opcoes_bairros_cidade = [b.split('_', 1)[1] for b in bairros_ibge_full if b.startswith(cidade_div + '_')]
+    sugestao = difflib.get_close_matches(bairro_div, opcoes_bairros_cidade, n=1, cutoff=0.90)
+    if sugestao:
+        nomes_originais = df_cidade_orig[df_cidade_orig['Chave_Local'] == div]['Bairro'].unique()
+        for n_orig in nomes_originais:
+            st.session_state.de_para_bairros[n_orig] = sugestao[0]
+        houve_auto_fix = True
+        
+if houve_auto_fix:
+    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
+        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+    st.rerun()
+
+divergentes = bairros_planilha - bairros_ibge_full
 
 if divergentes:
     with st.sidebar.expander("⚠️ Corrigir Divergências (Mapa vs Looker)", expanded=True):
@@ -559,7 +587,11 @@ if divergentes:
         
         bairro_planilha_selecionado = st.selectbox("1. Bairro da Planilha (Looker):", ["-- Selecione --"] + opcoes_unmapped)
         
-        bairros_ibge_raw = gdf_bairros_ativos[~gdf_bairros_ativos['Chave_Local'].isin(bairros_planilha)]
+        # Filtra opções do IBGE pela cidade divergente atual para não poluir
+        cidade_atual_div = bairro_planilha_selecionado.rsplit(" (", 1)[0] if bairro_planilha_selecionado != "-- Selecione --" else ""
+        cid_key = df_cidade_orig[df_cidade_orig['Bairro'] == cidade_atual_div]['Join_Cidade'].iloc[0] if not df_cidade_orig[df_cidade_orig['Bairro'] == cidade_atual_div].empty else ""
+        
+        bairros_ibge_raw = gdf_bairros[gdf_bairros['Join_Cidade'] == cid_key] if cid_key else gdf_bairros
         opcoes_ibge = []
         for _, row_i in bairros_ibge_raw.iterrows():
             nm_b = row_i.get('NM_BAIRRO_STR', 'Desconhecido')
@@ -580,6 +612,17 @@ if divergentes:
                     st.session_state.de_para_bairros[bairro_planilha_sug] = nome_ibge_limpo
                     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f: json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
                     st.rerun()
+
+# -------------------------------------------------------------
+# LIMPEZA DO MAPA (FILTRA APENAS POLÍGONOS QUE POSSUEM DADOS)
+# E CENTRALIZA O MAPA NELES
+# -------------------------------------------------------------
+cidades_mapa = df_cidade_orig['Join_Cidade'].dropna().unique()
+bairros_mapa = df_cidade_orig['Chave_Local'].dropna().unique()
+
+gdf_bairros_ativos = gdf_bairros[gdf_bairros['Chave_Local'].isin(bairros_mapa)]
+gdf_municipios_ativos = gdf_municipios[gdf_municipios['Join_Cidade'].isin(cidades_mapa)]
+
 
 df_cidade_sim = df_cidade_orig.copy()
 with timer("3. Motor de Regras Manuais"):
@@ -758,7 +801,7 @@ with st.sidebar.expander("🎨 Personalizar Cores"):
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-# --- PREPARAÇÃO DO MAPA CIENTÍFICO (VELOCIDADE EXTREMA + NUVEM ORGÂNICA DATA STUDIO) ---
+# --- PREPARAÇÃO DO MAPA CIENTÍFICO ---
 
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
@@ -784,7 +827,6 @@ def extrair_pontos_bairros(_gdf_cidade):
             dict_pontos[b_id] = pts
     return dict_pontos
 
-# Roda livre de cache para ser leve, não congela mais
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_bairros_ativos)
 
 def extrair_centroides_ia(_gdf_cidade):
@@ -797,30 +839,6 @@ def extrair_centroides_ia(_gdf_cidade):
 
 dict_bairros_centroides = extrair_centroides_ia(gdf_bairros_ativos)
 
-# Centros Urbanos Dinâmicos de Cidades (Velocidade total)
-def get_urban_center_for_city(cidade_limpa, gdf_bairros_ativos, uf_estado):
-    if 'city_urban_centers' not in st.session_state:
-        st.session_state.city_urban_centers = {}
-        
-    if cidade_limpa in st.session_state.city_urban_centers:
-        return st.session_state.city_urban_centers[cidade_limpa]
-        
-    bairros_desta_cidade = gdf_bairros_ativos[gdf_bairros_ativos['Join_Cidade'] == cidade_limpa]
-    if not bairros_desta_cidade.empty:
-        lat = bairros_desta_cidade.geometry.centroid.y.mean()
-        lon = bairros_desta_cidade.geometry.centroid.x.mean()
-        st.session_state.city_urban_centers[cidade_limpa] = (lat, lon)
-        return (lat, lon)
-        
-    coord = get_city_coords(cidade_limpa.title(), uf_estado)
-    if coord:
-        st.session_state.city_urban_centers[cidade_limpa] = coord
-        return coord
-        
-    st.session_state.city_urban_centers[cidade_limpa] = (0, 0)
-    return (0, 0)
-
-@st.cache_data
 def prepara_mapa_pontos(df_cenario):
     df_pontos = df_cenario.groupby(['Chave_Local', 'Cidade', 'Join_Cidade', 'Join_Bairro', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']).agg(
         Volume=('Volume', 'sum')
@@ -861,8 +879,7 @@ def render_capacity_warnings(df_cenario, label="Cenário"):
             else: st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
-def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, cx, zoom, uf_estado, pinos_bases=None, expandido=False):
-    # Mapa Oficial Escuro e Limpo da ESRI (Substitui CartoDB, Sem API Key, Sem Watermark)
+def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, cx, zoom, uf_estado, dict_fallback_coords, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=None, expandido=False):
     tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
     
@@ -896,6 +913,14 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
     idx_vol = cols.index('Volume')
     idx_qtd_bases = cols.index('Qtd_Bases')
     idx_parceiros = cols.index('Parceiros')
+    
+    city_centroids = {}
+    if not gdf_municipios_layer.empty:
+        for cid in gdf_municipios_layer['Join_Cidade'].unique():
+            gdf_mun = gdf_municipios_layer[gdf_municipios_layer['Join_Cidade'] == cid]
+            if not gdf_mun.empty:
+                rep = gdf_mun.geometry.iloc[0].representative_point()
+                city_centroids[cid] = (rep.y, rep.x)
 
     pontos_por_cep = {}
     for row in df_pontos.itertuples(index=False):
@@ -916,36 +941,36 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
         join_cidade_val = row_ref[idx_join_cidade]
         cabeca_cep_val = row_ref[idx_cabeca_cep]
         
-        # O ALGORITMO ORGÂNICO (DATA STUDIO SCATTER)
         lat_anchor = None
         lon_anchor = None
 
-        # 1. Âncora por Centróide de Bairro Conhecido
         if chave_id in dict_bairros_centroides:
             lat_anchor, lon_anchor = dict_bairros_centroides[chave_id]
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
-            # Nuvem concentrada (dentro do polígono do bairro)
             lat_center = lat_anchor + rng_cep.normal(0, 0.003)
             lon_center = lon_anchor + rng_cep.normal(0, 0.003)
             
         else:
-            # 2. Bairro sem polígono - Busca o Centro de Gravidade Urbana da Cidade Inteira
-            anchor = get_urban_center_for_city(join_cidade_val, gdf_bairros_layer, uf_estado)
-            if anchor and anchor != (0, 0):
-                lat_cidade, lon_cidade = anchor
+            if join_cidade_val in city_centroids:
+                lat_anchor, lon_anchor = city_centroids[join_cidade_val]
             else:
-                lat_cidade, lon_cidade = cy, cx
+                coord_cidade = dict_fallback_coords.get(cidade_nome)
+                if not coord_cidade: coord_cidade = get_city_coords(cidade_nome, uf_estado)
+                if coord_cidade:
+                    lat_anchor, lon_anchor = coord_cidade
+                else:
+                    lat_anchor, lon_anchor = cy, cx
 
             # Espalhamento Secundário: Agrupa CEPs próximos uns aos outros na cidade
             h_cab = int(hashlib.md5(str(cabeca_cep_val).encode()).hexdigest(), 16)
             rng_cab = np.random.RandomState(h_cab % (2**32 - 1))
-            lat_anchor = lat_cidade + rng_cab.uniform(-0.025, 0.025)
-            lon_anchor = lon_cidade + rng_cab.uniform(-0.025, 0.025)
+            lat_anchor += rng_cab.uniform(-0.025, 0.025)
+            lon_anchor += rng_cab.uniform(-0.025, 0.025)
 
             h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
             rng_cep = np.random.RandomState(h_cep % (2**32 - 1))
-            # Nuvem de Dispersão Gaussiana Orgânica (Impede cair em áreas verdes)
+            # Nuvem Orgânica para a mesma Cabeça de CEP
             lat_center = lat_anchor + rng_cep.normal(0, 0.006)
             lon_center = lon_anchor + rng_cep.normal(0, 0.006)
             
@@ -959,7 +984,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
             transp = r_base[idx_transp]
             cor = st.session_state.cores_transp.get(transp, '#333333')
             
-            # TOOLTIP ORGANIZADO COM A HIERARQUIA SOLICITADA
             html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'>" \
                            f"<b>Município:</b> {cidade_nome} - {uf_automatica_ponto}<br>" \
                            f"<b>Bairro:</b> {r_base[idx_bairro]}<br>" \
@@ -974,7 +998,6 @@ def desenhar_mapa_pinos(df_pontos, gdf_bairros_layer, gdf_municipios_layer, cy, 
             if qtd_real == 1:
                 markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
-                # Separa ligeiramente bases diferentes disputando a mesmíssima rua (CEP)
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
                 lat_pino = lat_center + rng_pino.normal(0, 0.0003)
@@ -998,12 +1021,14 @@ with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
-# Center Map
+# Center Map Baseado Exclusivamente na Plotagem Ativa
 if not gdf_bairros_ativos.empty: cy, cx = gdf_bairros_ativos.geometry.centroid.y.mean(), gdf_bairros_ativos.geometry.centroid.x.mean()
 elif not gdf_municipios_ativos.empty: cy, cx = gdf_municipios_ativos.geometry.centroid.y.mean(), gdf_municipios_ativos.geometry.centroid.x.mean()
 else:
     uf_defaults = {"GO": (-16.6869, -49.2648), "RJ": (-22.9068, -43.1729), "SP": (-23.5505, -46.6333), "DF": (-15.7801, -47.9292), "CE": (-3.7172, -38.5433), "BA": (-12.9714, -38.5014)}
     cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
+
+dict_fallback_coords = {}
 
 df_merged_sim = pd.merge(df_cidade_orig[['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']], df_cidade_sim[['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']], on=['Cidade', 'Bairro', 'Cabeca_CEP', COLUNA_CEP], suffixes=('_Atual', '_Simulado'))
 df_changed_sim = df_merged_sim[df_merged_sim['Transportadora_Atual'] != df_merged_sim['Transportadora_Simulado']].copy()
@@ -1058,7 +1083,7 @@ with aba1:
         bases_ativas_orig = sorted(df_cidade_orig['Transportadora'].unique())
         pinos_orig = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_orig and k != TAG_MISSORTING}
         with timer("5. Render Map Cenário Atual"):
-            desenhar_mapa_pinos(df_pontos_orig, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, None, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_orig, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_orig, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_orig, expandido=expandir_mapa)
         
         t_orig_legenda = [t for t in bases_ativas_orig if t in transp_selecionadas_sidebar]
         t_orig_legenda.append('Sem Dados / Divergência')
@@ -1097,7 +1122,7 @@ with aba1:
             else: st.write(f"- 🟢 Compartilhados: **0 pacotes**")
                 
             st.markdown("<br>", unsafe_allow_html=True)
-            if vol_unmapped_orig > 0: st.warning(f"⚠️ **Nuvens Urbanas (Sem Polígono IBGE):** {vol_unmapped_orig:,.0f} pacotes ({perc_unmapped_orig:.1f}%)")
+            if vol_unmapped_orig > 0: st.warning(f"⚠️ **Nuvens Urbanas Orgânicas:** {vol_unmapped_orig:,.0f} pacotes sem IBGE ({perc_unmapped_orig:.1f}%)")
             else: st.success(f"✅ Todos os bairros foram mapeados perfeitamente nos polígonos.")
             
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1165,7 +1190,7 @@ with aba1:
         bases_ativas_sim = sorted(df_cidade_sim['Transportadora'].unique())
         pinos_sim = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_sim and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
         with timer("6. Render Map Cenário Simulado"):
-            desenhar_mapa_pinos(df_pontos_sim, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, None, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_sim, expandido=expandir_mapa)
+            desenhar_mapa_pinos(df_pontos_sim, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_sim, expandido=expandir_mapa)
         
         t_sim_legenda = [t for t in bases_ativas_sim if t in transp_selecionadas_sidebar and t != TAG_MISSORTING]
         t_sim_legenda.append('Sem Dados / Divergência')
@@ -1193,7 +1218,7 @@ with aba1:
             perc_unmapped_sim = (vol_unmapped_sim / vol_sim_total * 100) if vol_sim_total > 0 else 0
             
             st.markdown("<br>", unsafe_allow_html=True)
-            if vol_unmapped_sim > 0: st.warning(f"⚠️ **Nuvens Urbanas (Sem Polígono IBGE):** {vol_unmapped_sim:,.0f} pacotes ({perc_unmapped_sim:.1f}%)")
+            if vol_unmapped_sim > 0: st.warning(f"⚠️ **Nuvens Urbanas Orgânicas:** {vol_unmapped_sim:,.0f} pacotes ({perc_unmapped_sim:.1f}%)")
             else: st.success(f"✅ Todos os bairros foram mapeados perfeitamente.")
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -1342,7 +1367,7 @@ with aba2:
                 bases_ativas_mapa_ia = sorted(df_cidade_ia_temp['Transportadora'].unique())
                 pinos_ia = {k: v for k, v in st.session_state.get('coords_bases', {}).items() if k in bases_ativas_mapa_ia and k != TAG_MISSORTING and k != 'Regiões sem capacidade'}
                 with timer("7. Render Map Cenário IA"):
-                    desenhar_mapa_pinos(df_pontos_ia, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, None, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_ia, expandido=expandir_mapa)
+                    desenhar_mapa_pinos(df_pontos_ia, gdf_bairros_ativos, gdf_municipios_ativos, cy, cx, zoom_padrao, uf_automatica, dict_fallback_coords, dict_bairros_centroides, dict_bairros_pontos_espalhados, pinos_bases=pinos_ia, expandido=expandir_mapa)
                 t_ia_legenda = [t for t in bases_ativas_mapa_ia if t in transp_selecionadas_sidebar]
                 t_ia_legenda.append('Sem Dados / Divergência')
                 gerar_legenda(t_ia_legenda)
@@ -1368,7 +1393,7 @@ with aba2:
                     perc_unmapped_ia = (vol_unmapped_ia / vol_ia_total * 100) if vol_ia_total > 0 else 0
                     
                     st.markdown("<br>", unsafe_allow_html=True)
-                    if vol_unmapped_ia > 0: st.warning(f"⚠️ **Nuvens Urbanas (Sem Polígono IBGE):** {vol_unmapped_ia:,.0f} pacotes ({perc_unmapped_ia:.1f}%)")
+                    if vol_unmapped_ia > 0: st.warning(f"⚠️ **Nuvens Urbanas Orgânicas:** {vol_unmapped_ia:,.0f} pacotes sem IBGE ({perc_unmapped_ia:.1f}%)")
                     else: st.success(f"✅ Todos os bairros foram mapeados perfeitamente.")
 
             st.markdown("<br>", unsafe_allow_html=True)

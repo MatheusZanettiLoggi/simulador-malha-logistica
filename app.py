@@ -220,6 +220,23 @@ def get_city_coords(cidade, uf):
     if res: return res
     return buscar_coordenadas(f"{cidade}, Brasil")
 
+@st.cache_data(show_spinner=False)
+def get_cep_anchor(cabeca_cep, cidade, uf):
+    """Mapeia geograficamente o CEP direto no Satélite (Traz a Exatidão do Data Studio)"""
+    time.sleep(1.0)
+    user_agent_dinamico = f"sim_log_{random.randint(10000, 99999)}"
+    try:
+        geolocator = Nominatim(user_agent=user_agent_dinamico)
+        query = f"{cabeca_cep}-000, {cidade}, {uf}, Brasil"
+        loc = geolocator.geocode(query, timeout=10)
+        if loc: return (loc.latitude, loc.longitude)
+        
+        query2 = f"{cidade}, {uf}, Brasil"
+        loc2 = geolocator.geocode(query2, timeout=10)
+        if loc2: return (loc2.latitude, loc2.longitude)
+    except: pass
+    return None
+
 def descobrir_uf_pelo_cep(cep_str):
     cep = re.sub(r'\D', '', str(cep_str)).zfill(8)
     prefixo = int(cep[:2])
@@ -351,7 +368,7 @@ def load_dados(excel_file, zip_file, modo):
     return df_vol, gdf, qtd_dias
 
 # ---------------------------------------------------------
-# NOVO MODO: ABRANGÊNCIA NACIONAL
+# LÓGICA DO MODO ABRANGÊNCIA NACIONAL
 # ---------------------------------------------------------
 @st.cache_data
 def get_brasil_city_coords():
@@ -486,8 +503,10 @@ elif st.session_state.app_mode == 'load':
                     st.session_state.cidade_selecionada_backup = saved_state.get('cidade_selecionada_backup')
                     st.session_state.bairros_selecionados_backup = saved_state.get('bairros_selecionados_backup', [])
 
-                    st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
-                    st.session_state.loaded_ibge_bytes = zf.read('mapa.zip')
+                    if 'volume.xlsx' in zf.namelist(): st.session_state.loaded_excel_bytes = zf.read('volume.xlsx')
+                    if 'mapa.zip' in zf.namelist(): st.session_state.loaded_ibge_bytes = zf.read('mapa.zip')
+                    if 'abrangencia.xlsx' in zf.namelist(): st.session_state.loaded_abrangencia = zf.read('abrangencia.xlsx')
+                    if 'volume_nacional.xlsx' in zf.namelist(): st.session_state.loaded_volume = zf.read('volume_nacional.xlsx')
 
                 st.session_state.is_loaded_from_backup = True
                 st.session_state.app_mode = 'running'
@@ -578,8 +597,6 @@ else:
 # EXECUÇÃO DO MODO ABRANGÊNCIA NACIONAL
 # ---------------------------------------------------------
 if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
-    st.title("🗺️ Abrangência de Malha (Visão Nacional)")
-    
     with timer("Carregamento Modo Brasil"):
         df_br, col_lmc, col_route1, col_region, col_city1, col_state1, col_service1 = processar_modo_nacional(
             st.session_state.loaded_abrangencia, 
@@ -589,30 +606,52 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_br['Base_Route'] = df_br[col_lmc].astype(str) + " (" + df_br[col_route1].astype(str) + ")"
     df_br['City_State'] = df_br[col_city1].astype(str).str.title() + " - " + df_br[col_state1].astype(str).str.upper()
 
-    # -----------------------------------------------
-    # Sidebar: Filtros Nacionais
-    # -----------------------------------------------
-    st.sidebar.markdown("---")
-    st.sidebar.title("🔍 Filtros Nacionais")
+    col_t, col_btn = st.columns([4, 1])
+    with col_t:
+        st.title("🗺️ Abrangência de Malha (Visão Nacional)")
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        state_to_save = {
+            'cores_transp': st.session_state.get('cores_transp', {}),
+            'modo_analise': st.session_state.get('modo_analise', '🗺️ Abrangência de todo o Brasil')
+        }
+        json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr('sessao.json', json_string)
+            zf.writestr('abrangencia.xlsx', st.session_state.loaded_abrangencia)
+            zf.writestr('volume_nacional.xlsx', st.session_state.loaded_volume)
+        st.download_button(label="💾 Salvar Estado da Análise", data=buf.getvalue(), file_name="Backup_Malha_Nacional.zip", mime="application/zip", use_container_width=True)
 
-    f_estados = st.sidebar.multiselect("Estado(s):", sorted(df_br[col_state1].dropna().unique()))
-
+    # -----------------------------------------------
+    # Top Bar: Filtros Nacionais Inteligentes
+    # -----------------------------------------------
+    st.markdown("### 🔍 Filtros de Visualização")
+    
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        f_estados = st.multiselect("Estado(s):", sorted(df_br[col_state1].dropna().unique()))
+    
     if f_estados:
         cidades_disp = sorted(df_br[df_br[col_state1].isin(f_estados)]['City_State'].dropna().unique())
     else:
         cidades_disp = sorted(df_br['City_State'].dropna().unique())
         
-    f_cidades = st.sidebar.multiselect("Município(s):", cidades_disp)
-    f_bases = st.sidebar.multiselect("Base(s) e Routing Code:", sorted(df_br['Base_Route'].dropna().unique()))
-    f_regioes = st.sidebar.multiselect("Região de Preço:", sorted(df_br[col_region].astype(str).unique()))
-    f_servicos = st.sidebar.multiselect("Tipo de Serviço:", sorted(df_br[col_service1].astype(str).unique()))
+    with col_f2:
+        f_cidades = st.multiselect("Município(s):", cidades_disp)
+        
+    with col_f3:
+        f_bases = st.multiselect("Base(s) e Routing Code:", sorted(df_br['Base_Route'].dropna().unique()))
+        
+    col_f4, col_f5, col_f6 = st.columns(3)
+    with col_f4:
+        f_regioes = st.multiselect("Região de Preço:", sorted(df_br[col_region].astype(str).unique()))
+    with col_f5:
+        f_servicos = st.multiselect("Tipo de Serviço:", sorted(df_br[col_service1].astype(str).unique()))
+    with col_f6:
+        highlight_vol = st.number_input("Destacar municípios com > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes (efeito fantasma).")
 
-    max_vol = float(df_br.groupby('join_city')['pct_dia'].sum().max())
-    max_vol = max_vol if pd.notna(max_vol) and max_vol > 0 else 100.0
-
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**🌟 Destaque no Mapa**")
-    highlight_vol = st.sidebar.slider("Destacar municípios com > X pacotes/dia:", 0, int(max_vol), 0, help="Municípios abaixo deste corte ficarão transparentes no mapa para destacar as grandes operações.")
+    st.markdown("---")
 
     # Aplicação de Filtros Matemáticos
     df_plot = df_br.copy()
@@ -623,7 +662,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     if f_servicos: df_plot = df_plot[df_plot[col_service1].isin(f_servicos)]
 
     # -----------------------------------------------
-    # Cores Personalizáveis
+    # Cores Personalizáveis e Campo de Busca
     # -----------------------------------------------
     if 'cores_transp' not in st.session_state:
         st.session_state.cores_transp = {}
@@ -632,8 +671,11 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     bases_ativas_br = sorted(df_plot[col_lmc].dropna().unique())
     
     with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
+        busca_base = st.text_input("🔍 Buscar Base para alterar a cor:", "")
+        bases_para_pintar = [b for b in bases_ativas_br if busca_base.lower() in str(b).lower()] if busca_base else bases_ativas_br
+        
         idx_cor = 0
-        for b in bases_ativas_br:
+        for b in bases_para_pintar:
             if b not in st.session_state.cores_transp:
                 st.session_state.cores_transp[b] = '#9b59b6' if is_correios_global(b) else cores_padrao_br[idx_cor % len(cores_padrao_br)]
                 idx_cor += 1
@@ -657,7 +699,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot = df_plot.dropna(subset=['latitude', 'longitude'])
     
     # -----------------------------------------------
-    # Renderização do Mapa (Auto-Center Inteligente)
+    # Renderização do Mapa (Tamanho Proporcional + Auto-Center)
     # -----------------------------------------------
     cy, cx = -15.7801, -47.9292
     m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles="CartoDB dark_matter", prefer_canvas=True)
@@ -668,6 +710,12 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         bounds_min_lon, bounds_max_lon = df_plot['longitude'].min(), df_plot['longitude'].max()
         if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
             m_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+            
+        vol_por_cidade = df_plot.groupby(['join_city', col_state1])['pct_dia'].sum()
+        min_v = vol_por_cidade.min()
+        max_v = vol_por_cidade.max()
+    else:
+        min_v, max_v = 0, 1
 
     for (city, state), group in df_plot.groupby(['join_city', col_state1]):
         lat = group['latitude'].iloc[0]
@@ -682,6 +730,15 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         # Lógica de Fading Ghost (Transparência se vol < highlight)
         opacity = 1.0 if total_vol_city >= highlight_vol else 0.25
         border_op = 1.0 if total_vol_city >= highlight_vol else 0.4
+        
+        # Escala de Tamanho Proporcional e Elegante (Min-Max Scaler com limite físico)
+        if max_v > min_v:
+            norm_vol = (total_vol_city - min_v) / (max_v - min_v)
+            raio_px = int(12 + (norm_vol * 22)) # Cresce no máximo até 34 pixels para não poluir
+        else:
+            raio_px = 16
+            
+        font_size = max(8, int(raio_px / 2.5))
         
         tooltip_html = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 250px;'>"
         tooltip_html += f"<b>Município:</b> {group[col_city1].iloc[0]} - {group[col_state1].iloc[0]}<br><hr style='margin: 5px 0;'>"
@@ -698,8 +755,8 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         <div style="
             background-color: {cor};
             opacity: {opacity};
-            width: 14px;
-            height: 14px;
+            width: {raio_px}px;
+            height: {raio_px}px;
             border-radius: 50%;
             border: 1px solid rgba(255,255,255,{border_op});
             display: flex;
@@ -707,7 +764,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             align-items: center;
             color: white;
             font-weight: bold;
-            font-size: 10px;
+            font-size: {font_size}px;
             box-shadow: 1px 1px 3px rgba(0,0,0,0.5);
         ">
             {"!" if is_dupe else ""}
@@ -716,7 +773,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         
         folium.Marker(
             [lat, lon],
-            icon=folium.DivIcon(html=icon_html, icon_size=(14,14), icon_anchor=(7,7)),
+            icon=folium.DivIcon(html=icon_html, icon_size=(raio_px, raio_px), icon_anchor=(raio_px//2, raio_px//2)),
             tooltip=tooltip_html
         ).add_to(m_br)
 
@@ -733,7 +790,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     
     col_mapa, col_tabela = st.columns([3, 1])
     with col_mapa:
-        st.markdown("**Localização Nível Município**")
+        st.markdown("**Localização Proporcional ao Volume**")
         folium_static(m_br, width=1000, height=700)
     with col_tabela:
         st.markdown("**Resumo Operacional (Filtrado)**")
@@ -1145,14 +1202,24 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                 time.sleep(1)
                 st.rerun()
 
-transp_selecionadas_sidebar = st.sidebar.multiselect("Mostrar parceiros no mapa:", [t for t in transp_ativas if t != TAG_MISSORTING], default=[t for t in transp_ativas if t != TAG_MISSORTING])
 with st.sidebar.expander("🎨 Personalizar Cores"):
-    for transp in transp_ativas:
+    busca_base = st.text_input("🔍 Buscar Base para alterar a cor:", "")
+    bases_para_pintar = [b for b in transp_ativas if busca_base.lower() in str(b).lower()] if busca_base else transp_ativas
+
+    for transp in bases_para_pintar:
         if transp == TAG_MISSORTING: continue
-        st.session_state.cores_transp[transp] = st.color_picker(f"{transp}", st.session_state.cores_transp.get(transp, '#000000'))
+        st.session_state.cores_transp[transp] = st.color_picker(f"{transp}", st.session_state.cores_transp.get(transp, '#000000'), key=f"cor_std_{transp}")
 
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
+
+@st.cache_data(show_spinner=False)
+def get_city_coords(cidade, uf):
+    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
+    query = f"{cidade}, {uf}, Brasil"
+    res = buscar_coordenadas(query)
+    if res: return res
+    return buscar_coordenadas(f"{cidade}, Brasil")
 
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}

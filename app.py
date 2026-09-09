@@ -491,6 +491,7 @@ elif st.session_state.app_mode == 'load':
                     saved_state = json.loads(json_str)
 
                     st.session_state.regras_simulacao = saved_state.get('regras_simulacao', [])
+                    st.session_state.regras_simulacao_br = saved_state.get('regras_simulacao_br', [])
                     st.session_state.coords_bases = {k: tuple(v) for k, v in saved_state.get('coords_bases', {}).items()}
                     st.session_state.enderecos_bases = saved_state.get('enderecos_bases', {})
                     st.session_state.capacidades_bases = saved_state.get('capacidades_bases', {})
@@ -613,7 +614,8 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         st.markdown("<br>", unsafe_allow_html=True)
         state_to_save = {
             'cores_transp': st.session_state.get('cores_transp', {}),
-            'modo_analise': st.session_state.get('modo_analise', '🗺️ Abrangência de todo o Brasil')
+            'modo_analise': st.session_state.get('modo_analise', '🗺️ Abrangência de todo o Brasil'),
+            'regras_simulacao_br': st.session_state.get('regras_simulacao_br', [])
         }
         json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
         buf = io.BytesIO()
@@ -661,26 +663,6 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     if f_regioes: df_plot = df_plot[df_plot[col_region].isin(f_regioes)]
     if f_servicos: df_plot = df_plot[df_plot[col_service1].isin(f_servicos)]
 
-    # -----------------------------------------------
-    # Cores Personalizáveis e Campo de Busca
-    # -----------------------------------------------
-    if 'cores_transp' not in st.session_state:
-        st.session_state.cores_transp = {}
-        
-    cores_padrao_br = ['#3498db', '#e67e22', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#fdcb6e', '#ff9ff3', '#00cec9', '#fab1a0', '#74b9ff', '#a29bfe', '#dfe6e9']
-    bases_ativas_br = sorted(df_plot[col_lmc].dropna().unique())
-    
-    with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
-        busca_base = st.text_input("🔍 Buscar Base para alterar a cor:", "")
-        bases_para_pintar = [b for b in bases_ativas_br if busca_base.lower() in str(b).lower()] if busca_base else bases_ativas_br
-        
-        idx_cor = 0
-        for b in bases_para_pintar:
-            if b not in st.session_state.cores_transp:
-                st.session_state.cores_transp[b] = '#9b59b6' if is_correios_global(b) else cores_padrao_br[idx_cor % len(cores_padrao_br)]
-                idx_cor += 1
-            st.session_state.cores_transp[b] = st.color_picker(f"{b}", st.session_state.cores_transp[b], key=f"cor_br_{b}")
-
     # Processamento Final de Coordenadas Ausentes
     missing_coords = df_plot[df_plot['latitude'].isna()]
     if not missing_coords.empty:
@@ -699,8 +681,32 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot = df_plot.dropna(subset=['latitude', 'longitude'])
     
     # -----------------------------------------------
-    # Renderização do Mapa (Tamanho Proporcional + Auto-Center)
+    # Cores Personalizáveis
     # -----------------------------------------------
+    if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
+        
+    cores_padrao_br = ['#3498db', '#e67e22', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#fdcb6e', '#ff9ff3', '#00cec9', '#fab1a0', '#74b9ff', '#a29bfe', '#dfe6e9']
+    bases_ativas_br = sorted(df_br['Base_Route'].dropna().unique())
+    
+    # Pre-popula cores
+    idx_cor = 0
+    for b in bases_ativas_br:
+        if b not in st.session_state.cores_transp:
+            st.session_state.cores_transp[b] = '#9b59b6' if is_correios_global(b) else cores_padrao_br[idx_cor % len(cores_padrao_br)]
+            idx_cor += 1
+            
+    with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
+        bases_para_pintar = st.multiselect("🔍 Busque e selecione a(s) Base(s):", bases_ativas_br, help="Digite para buscar e selecione as bases.")
+        if bases_para_pintar:
+            for b in bases_para_pintar:
+                st.session_state.cores_transp[b] = st.color_picker(f"Cor para {b}", st.session_state.cores_transp[b], key=f"cor_br_{b}")
+        else:
+            st.info("Selecione uma base acima para editar sua cor.")
+    
+    # -----------------------------------------------
+    # Renderização do Mapa 1 (Cenário Atual)
+    # -----------------------------------------------
+    st.markdown("### 📍 Cenário Atual")
     cy, cx = -15.7801, -47.9292
     m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles="CartoDB dark_matter", prefer_canvas=True)
     Fullscreen().add_to(m_br)
@@ -721,20 +727,18 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         lat = group['latitude'].iloc[0]
         lon = group['longitude'].iloc[0]
         
-        is_dupe = len(group) > 1
-        first_base = group[col_lmc].iloc[0]
+        is_dupe = group['Base_Route'].nunique() > 1
+        first_base = group['Base_Route'].iloc[0]
         cor = st.session_state.cores_transp.get(first_base, '#3498db')
         
         total_vol_city = group['pct_dia'].sum()
         
-        # Lógica de Fading Ghost (Transparência se vol < highlight)
         opacity = 1.0 if total_vol_city >= highlight_vol else 0.25
         border_op = 1.0 if total_vol_city >= highlight_vol else 0.4
         
-        # Escala de Tamanho Proporcional e Elegante (Min-Max Scaler com limite físico)
         if max_v > min_v:
             norm_vol = (total_vol_city - min_v) / (max_v - min_v)
-            raio_px = int(12 + (norm_vol * 22)) # Cresce no máximo até 34 pixels para não poluir
+            raio_px = int(12 + (norm_vol * 22))
         else:
             raio_px = 16
             
@@ -777,24 +781,196 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             tooltip=tooltip_html
         ).add_to(m_br)
 
-    # -----------------------------------------------
-    # Tabela Lateral Resultante
-    # -----------------------------------------------
-    df_table = df_plot.groupby(col_lmc).agg(
+    df_table = df_plot.groupby('Base_Route').agg(
         Volume_Dia=('pct_dia', 'sum'),
         Municipios_Atendidos=('join_city', 'nunique')
     ).reset_index().sort_values('Volume_Dia', ascending=False)
     
-    df_table.rename(columns={col_lmc: 'Base LMC'}, inplace=True)
+    df_table.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
     df_table['Volume_Dia'] = df_table['Volume_Dia'].round(0)
     
     col_mapa, col_tabela = st.columns([3, 1])
     with col_mapa:
         st.markdown("**Localização Proporcional ao Volume**")
-        folium_static(m_br, width=1000, height=700)
+        folium_static(m_br, width=1000, height=550)
     with col_tabela:
-        st.markdown("**Resumo Operacional (Filtrado)**")
+        st.markdown("**Resumo Operacional (Atual)**")
         st.dataframe(df_table, use_container_width=True, hide_index=True)
+
+
+    # -----------------------------------------------
+    # Cenário Simulado (Nacional)
+    # -----------------------------------------------
+    st.markdown("---")
+    st.markdown("### 🔄 Cenário Simulado")
+    st.markdown("#### Simulação de Troca Manual (Nacional)")
+
+    if 'regras_simulacao_br' not in st.session_state:
+        st.session_state.regras_simulacao_br = []
+        
+    tipo_sim_br = st.selectbox("1. Nível de Migração:", ["Base Completa (De ➔ Para)", "Município"])
+
+    with st.form("form_troca_nacional"):
+        col_s1, col_s2, col_s3 = st.columns([3, 2, 1])
+        with col_s1:
+            if tipo_sim_br == "Base Completa (De ➔ Para)":
+                opcoes_origem = sorted(df_plot['Base_Route'].unique())
+                origem_br = st.multiselect("Selecione a(s) Base(s) de Origem:", opcoes_origem)
+            else: # Município
+                opcoes_origem = sorted(df_plot['City_State'].unique())
+                origem_br = st.multiselect("Selecione o(s) Município(s):", opcoes_origem)
+        with col_s2:
+            opcoes_destino = sorted(df_br['Base_Route'].unique())
+            if "Regiões sem capacidade" not in opcoes_destino: opcoes_destino.append("Regiões sem capacidade")
+            destino_br = st.selectbox("2. Para a Base:", opcoes_destino)
+        with col_s3:
+            st.markdown("<br>", unsafe_allow_html=True)
+            btn_add_regra_br = st.form_submit_button("Aplicar mudanças", type="primary", use_container_width=True)
+
+    if btn_add_regra_br:
+        if origem_br:
+            for o in origem_br:
+                st.session_state.regras_simulacao_br.append({'tipo': tipo_sim_br, 'origem': o, 'destino': destino_br})
+            st.rerun()
+        else:
+            st.warning("Selecione ao menos uma origem para aplicar.")
+
+    if st.session_state.regras_simulacao_br:
+        if st.button("🗑️ Desfazer todas as mudanças (Reiniciar Simulador)"):
+            st.session_state.regras_simulacao_br = []
+            st.rerun()
+
+    # Aplicação das Regras e Comparação
+    df_sim_plot = df_plot.copy()
+    df_sim_plot['ID_Row'] = df_sim_plot.index 
+    
+    for regra in st.session_state.regras_simulacao_br:
+        t = regra['tipo']
+        o = regra['origem']
+        d = regra['destino']
+        
+        dest_parts = d.rsplit(" (", 1)
+        dest_lmc = dest_parts[0]
+        dest_route = dest_parts[1].replace(")", "") if len(dest_parts) > 1 else ""
+
+        if t == "Base Completa (De ➔ Para)":
+            mask = df_sim_plot['Base_Route'] == o
+        elif t == "Município":
+            mask = df_sim_plot['City_State'] == o
+            
+        df_sim_plot.loc[mask, 'Base_Route'] = d
+        df_sim_plot.loc[mask, col_lmc] = dest_lmc
+        df_sim_plot.loc[mask, col_route1] = dest_route
+
+    # Agrupa para não ter duplicação se duas bases iguais passarem a existir na mesma cidade
+    df_sim_grouped = df_sim_plot.groupby(['join_city', col_state1, 'Base_Route']).agg({
+        'latitude': 'first',
+        'longitude': 'first',
+        col_city1: 'first',
+        col_region: 'first',
+        col_service1: 'first',
+        'pct_dia': 'sum',
+        col_lmc: 'first',
+        col_route1: 'first',
+        'City_State': 'first'
+    }).reset_index()
+
+    m_sim_br = folium.Map(location=[cy, cx], zoom_start=4, tiles="CartoDB dark_matter", prefer_canvas=True)
+    Fullscreen().add_to(m_sim_br)
+
+    if not df_sim_grouped.empty:
+        bounds_min_lat, bounds_max_lat = df_sim_grouped['latitude'].min(), df_sim_grouped['latitude'].max()
+        bounds_min_lon, bounds_max_lon = df_sim_grouped['longitude'].min(), df_sim_grouped['longitude'].max()
+        if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
+            m_sim_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+
+    for (city, state), group in df_sim_grouped.groupby(['join_city', col_state1]):
+        lat = group['latitude'].iloc[0]
+        lon = group['longitude'].iloc[0]
+        
+        is_dupe = group['Base_Route'].nunique() > 1
+        first_base = group['Base_Route'].iloc[0]
+        cor = st.session_state.cores_transp.get(first_base, '#3498db')
+        
+        total_vol_city = group['pct_dia'].sum()
+        
+        opacity = 1.0 if total_vol_city >= highlight_vol else 0.25
+        border_op = 1.0 if total_vol_city >= highlight_vol else 0.4
+        
+        if max_v > min_v:
+            norm_vol = (total_vol_city - min_v) / (max_v - min_v)
+            raio_px = int(12 + (norm_vol * 22))
+        else:
+            raio_px = 16
+            
+        font_size = max(8, int(raio_px / 2.5))
+        
+        tooltip_html = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 250px;'>"
+        tooltip_html += f"<b>Município:</b> {group[col_city1].iloc[0]} - {group[col_state1].iloc[0]}<br><hr style='margin: 5px 0;'>"
+        
+        for _, r in group.iterrows():
+            tooltip_html += f"<b>LMC:</b> {r[col_lmc]}<br>"
+            tooltip_html += f"<b>Routing Code:</b> {r[col_route1]}<br>"
+            tooltip_html += f"<b>Região de Preço:</b> {r[col_region]}<br>"
+            tooltip_html += f"<b>Serviço:</b> {r[col_service1]}<br>"
+            tooltip_html += f"<b>Volume Base:</b> {r['pct_dia']:,.0f} pct/dia<br><br>"
+        tooltip_html += "</div>"
+        
+        icon_html = f'''
+        <div style="
+            background-color: {cor};
+            opacity: {opacity};
+            width: {raio_px}px;
+            height: {raio_px}px;
+            border-radius: 50%;
+            border: 1px solid rgba(255,255,255,{border_op});
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-weight: bold;
+            font-size: {font_size}px;
+            box-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+        ">
+            {"!" if is_dupe else ""}
+        </div>
+        '''
+        
+        folium.Marker(
+            [lat, lon],
+            icon=folium.DivIcon(html=icon_html, icon_size=(raio_px, raio_px), icon_anchor=(raio_px//2, raio_px//2)),
+            tooltip=tooltip_html
+        ).add_to(m_sim_br)
+
+    df_table_sim = df_sim_grouped.groupby('Base_Route').agg(
+        Volume_Dia=('pct_dia', 'sum'),
+        Municipios_Atendidos=('join_city', 'nunique')
+    ).reset_index().sort_values('Volume_Dia', ascending=False)
+    
+    df_table_sim.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
+    df_table_sim['Volume_Dia'] = df_table_sim['Volume_Dia'].round(0)
+    
+    col_mapa2, col_tabela2 = st.columns([3, 1])
+    with col_mapa2:
+        st.markdown("**Localização Proporcional ao Volume (Simulado)**")
+        folium_static(m_sim_br, width=1000, height=550)
+    with col_tabela2:
+        st.markdown("**Resumo Operacional (Simulado)**")
+        st.dataframe(df_table_sim, use_container_width=True, hide_index=True)
+        
+    st.markdown("---")
+    st.markdown("**🔄 Relação de Municípios Alterados (De ➔ Para)**")
+    
+    df_compare = pd.merge(df_plot, df_sim_plot, on='ID_Row', suffixes=('_Atual', '_Simulado'))
+    df_changed_br = df_compare[df_compare['Base_Route_Atual'] != df_compare['Base_Route_Simulado']]
+
+    if df_changed_br.empty:
+        st.info("Nenhum Município foi alterado em relação ao Cenário Atual.")
+    else:
+        df_changed_br = df_changed_br[[col_city1 + '_Atual', col_state1 + '_Atual', col_region + '_Atual', 'Base_Route_Atual', 'Base_Route_Simulado', 'pct_dia_Atual']]
+        df_changed_br.columns = ['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada', 'Volume Migrado (pct/dia)']
+        df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].round(0)
+        st.dataframe(df_changed_br, use_container_width=True, hide_index=True)
         
     st.stop()
 
@@ -988,22 +1164,20 @@ def deve_pedir_capacidade(nome_base):
     nome_lower = str(nome_base).lower()
     return not (nome_lower.startswith("agf") or nome_lower.startswith("correios") or nome_lower == "regiões sem capacidade")
 
-bases_sem_coord = [b for b in todas_transp_globais if b not in st.session_state.coords_bases and b not in st.session_state.bases_ignoradas and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
+bases_sem_coord = [b for b in transp_ativas if b not in st.session_state.coords_bases and b not in st.session_state.bases_ignoradas and b != TAG_MISSORTING and b != 'Regiões sem capacidade']
 if bases_sem_coord or st.session_state.erros_geocoding:
-    st.title(f"📍 Configuração de Bases (Global)")
-    st.info("Para liberar o dashboard, insira o endereço de todas as bases presentes no arquivo. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação na análise.")
+    st.title(f"📍 Configuração de Bases")
+    st.info("Para liberar o dashboard, insira o endereço de cada base. Você também pode inserir a Capacidade (Pacotes/Dia) para acompanhar o nível de saturação da base na análise.")
     
     novos_enderecos = {}
     novas_capacidades = {}
     cols = st.columns(2)
     idx_col = 0
-    
-    for base in todas_transp_globais:
-        if base == TAG_MISSORTING or base == 'Regiões sem capacidade' or base in st.session_state.bases_ignoradas: continue
+    for base in transp_ativas:
+        if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
         with cols[idx_col % 2]:
             st.markdown(f"**🏢 Sede: {base}**")
-            if f"input_end_{base}" not in st.session_state:
-                st.session_state[f"input_end_{base}"] = st.session_state.enderecos_bases.get(base, "")
+            if f"input_end_{base}" not in st.session_state: st.session_state[f"input_end_{base}"] = st.session_state.enderecos_bases.get(base, "")
             
             if st.session_state.get(f"confirm_remove_{base}", False):
                 st.warning(f"Remover '{base}' da análise?")
@@ -1017,23 +1191,9 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                     st.rerun()
             else:
                 c_input, c_cap, c_btn = st.columns([0.65, 0.25, 0.10])
-                with c_input:
-                    novos_enderecos[base] = st.text_input(
-                        f"Endereço_{base}", 
-                        value=st.session_state[f"input_end_{base}"],
-                        key=f"input_end_{base}",
-                        placeholder="Ex: Av. Paulista, 1000", 
-                        label_visibility="collapsed"
-                    )
+                with c_input: novos_enderecos[base] = st.text_input(f"Endereço_{base}", value=st.session_state[f"input_end_{base}"], key=f"input_end_{base}", placeholder="Ex: Av. Paulista, 1000", label_visibility="collapsed")
                 with c_cap:
-                    if deve_pedir_capacidade(base):
-                        novas_capacidades[base] = st.number_input(
-                            f"Capacidade",
-                            min_value=0,
-                            value=int(st.session_state.capacidades_bases.get(base, 0)),
-                            key=f"cap_end_{base}",
-                            help="Máximo de pacotes/dia que a base suporta."
-                        )
+                    if deve_pedir_capacidade(base): novas_capacidades[base] = st.number_input(f"Capacidade", min_value=0, value=int(st.session_state.capacidades_bases.get(base, 0)), key=f"cap_end_{base}", help="Máximo de pacotes/dia que a base suporta.")
                     else:
                         st.caption("∞ (Ilimitado)")
                         novas_capacidades[base] = float('inf')
@@ -1047,7 +1207,6 @@ if bases_sem_coord or st.session_state.erros_geocoding:
             
     st.markdown("<br>", unsafe_allow_html=True)
     submit_enderecos = st.button("Localizar Bases e Iniciar Simulador 🚀", type="primary", use_container_width=True)
-        
     if submit_enderecos:
         with st.spinner("Analisando coordenadas e atualizando capacidades..."):
             erros = []
@@ -1057,21 +1216,17 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                 if not end.strip():
                     erros.append(base)
                     continue
-                
                 coord_match = re.match(r'^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$', end)
                 if coord_match:
                     st.session_state.coords_bases[base] = (float(coord_match.group(1)), float(coord_match.group(2)))
                     st.session_state.enderecos_bases[base] = end
                     continue
-                
                 if base not in st.session_state.coords_bases or st.session_state.enderecos_bases.get(base) != end:
                     c = buscar_coordenadas(end.strip())
                     if c:
                         st.session_state.coords_bases[base] = c
                         st.session_state.enderecos_bases[base] = end
-                    else:
-                        erros.append(base)
-            
+                    else: erros.append(base)
             if erros:
                 st.session_state.erros_geocoding = erros
                 st.error(f"❌ O Satélite falhou ao encontrar: {', '.join(erros)}.")
@@ -1091,95 +1246,28 @@ if bases_sem_coord or st.session_state.erros_geocoding:
                 st.session_state.enderecos_bases[b_err] = "Centro da Região (Fallback)"
             st.session_state.erros_geocoding = []
             st.rerun()
-            
-    st.markdown("---")
-    st.markdown("### 🗺️ Ferramenta Auxiliar: Clique no Mapa")
-    
-    dict_locais = {}
-    for _, row in gdf_cidade.drop_duplicates(subset=['NM_BAIRRO_STR']).iterrows():
-        nome = str(row['NM_BAIRRO_STR'])
-        if nome.strip() == "": continue
-        if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)":
-            cep_amostra = df_cidade_orig[COLUNA_CEP].iloc[0] if not df_cidade_orig.empty else "00000000"
-            uf = descobrir_uf_pelo_cep(cep_amostra)
-            display_name = f"{nome} - {uf}"
-        else:
-            mun = str(row['NM_MUN']) if 'NM_MUN' in row else ""
-            display_name = f"{nome} - {mun}" if mun else f"{nome}"
-        dict_locais[display_name] = row['Chave_Local']
-
-    opcoes_locais = ["-- Visão Geral do Mapa --"] + list(dict_locais.keys())
-    label_busca = "🔍 Buscar Município para focar no mapa:" if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else "🔍 Buscar Bairro para focar no mapa:"
-    
-    local_foco_display = st.selectbox(label_busca, opcoes_locais)
-
-    if local_foco_display == "-- Visão Geral do Mapa --":
-        cy_helper = gdf_cidade.geometry.centroid.y.mean() if not gdf_cidade.empty else -22.9068
-        cx_helper = gdf_cidade.geometry.centroid.x.mean() if not gdf_cidade.empty else -43.1729
-        zoom_helper = 8 if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else 11
-        gdf_foco = gpd.GeoDataFrame()
-    else:
-        chave_real = dict_locais[local_foco_display]
-        gdf_foco = gdf_cidade[gdf_cidade['Chave_Local'] == chave_real]
-        if not gdf_foco.empty:
-            cy_helper = gdf_foco.geometry.centroid.y.mean()
-            cx_helper = gdf_foco.geometry.centroid.x.mean()
-            zoom_helper = 12 if st.session_state.modo_analise == "🗺️ Regional (Por Cidades)" else 14
-        else:
-            cy_helper = gdf_cidade.geometry.centroid.y.mean()
-            cx_helper = gdf_cidade.geometry.centroid.x.mean()
-            zoom_helper = 8
-
-    m_helper = folium.Map(location=[cy_helper, cx_helper], zoom_start=zoom_helper, tiles="CartoDB dark_matter")
-    Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_helper)
-    
-    if not gdf_cidade.empty:
-        folium.GeoJson(
-            gdf_cidade, 
-            style_function=lambda x: {'fillColor': '#333333', 'color': '#666666', 'weight': 1, 'fillOpacity': 0.5},
-            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local:'], style="background-color: white; color: #333; padding: 5px;")
-        ).add_to(m_helper)
-    
-    if not gdf_foco.empty:
-        folium.GeoJson(
-            gdf_foco,
-            style_function=lambda x: {'fillColor': '#f1c40f', 'color': '#f1c40f', 'weight': 2, 'fillOpacity': 0.6},
-            tooltip=folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local Destacado:'], style="background-color: white; color: #333; padding: 5px;")
-        ).add_to(m_helper)
-    
-    map_data = st_folium(m_helper, height=350, width=800, key="mapa_auxiliar")
-    
-    if map_data and map_data.get("last_clicked"):
-        lat_c = map_data["last_clicked"]["lat"]
-        lng_c = map_data["last_clicked"]["lng"]
-        st.success(f"📍 **Coordenada Capturada:** `{lat_c}, {lng_c}` (Copie e cole na caixa da base)")
     st.stop()
 
+# --- OPÇÕES LATERAIS ---
 st.sidebar.markdown("---")
 with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
     with st.form("form_edit_sidebar"):
         novos_ends_sidebar = {}
         novas_caps_sidebar = {}
-        todas_bases_projeto = sorted(df_cidade_full['Transportadora'].unique())
-        
-        for base in todas_bases_projeto:
+        for base in transp_ativas:
             if base == TAG_MISSORTING or base == 'Regiões sem capacidade': continue
             st.markdown(f"**{base}**")
             is_ignored = st.checkbox("❌ Removida (Missorting)", value=(base in st.session_state.bases_ignoradas), key=f"ignorar_edit_{base}")
-            
             if not is_ignored:
                 val_atual = st.session_state.enderecos_bases.get(base, "")
                 cap_atual = st.session_state.capacidades_bases.get(base, 0)
                 novos_ends_sidebar[base] = st.text_input(f"Endereço", value=val_atual, key=f"end_edit_{base}", label_visibility="collapsed")
-                
-                if deve_pedir_capacidade(base):
-                    novas_caps_sidebar[base] = st.number_input("Pacotes/Dia", value=int(cap_atual) if cap_atual != float('inf') else 0, key=f"cap_s_{base}")
+                if deve_pedir_capacidade(base): novas_caps_sidebar[base] = st.number_input("Pacotes/Dia", value=int(cap_atual) if cap_atual != float('inf') else 0, key=f"cap_s_{base}")
                 else:
                     novas_caps_sidebar[base] = float('inf')
                     st.caption("∞ (Ilimitado)")
-            
         if st.form_submit_button("Atualizar Configurações", type="primary", use_container_width=True):
-            st.session_state.bases_ignoradas = [b for b in todas_bases_projeto if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
+            st.session_state.bases_ignoradas = [b for b in transp_ativas if b != TAG_MISSORTING and st.session_state.get(f"ignorar_edit_{b}")]
             erros_edit = []
             for base, end in novos_ends_sidebar.items():
                 st.session_state.capacidades_bases[base] = novas_caps_sidebar[base]
@@ -1194,33 +1282,29 @@ with st.sidebar.expander("✏️ Editar Bases e Capacidades", expanded=False):
                     if c:
                         st.session_state.coords_bases[base] = c
                         st.session_state.enderecos_bases[base] = end
-                    else:
-                        erros_edit.append(base)
+                    else: erros_edit.append(base)
             if erros_edit: st.error(f"Erro ao buscar: {', '.join(erros_edit)}")
             else:
                 st.success("Atualizado!")
                 time.sleep(1)
                 st.rerun()
 
-with st.sidebar.expander("🎨 Personalizar Cores"):
-    busca_base = st.text_input("🔍 Buscar Base para alterar a cor:", "")
-    bases_para_pintar = [b for b in transp_ativas if busca_base.lower() in str(b).lower()] if busca_base else transp_ativas
-
-    for transp in bases_para_pintar:
-        if transp == TAG_MISSORTING: continue
-        st.session_state.cores_transp[transp] = st.color_picker(f"{transp}", st.session_state.cores_transp.get(transp, '#000000'), key=f"cor_std_{transp}")
+with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
+    bases_ativas_color = sorted(df_cidade_orig['Transportadora'].dropna().unique())
+    bases_para_pintar = st.multiselect("🔍 Busque e selecione a(s) Base(s):", bases_ativas_color, help="Digite para buscar e selecione as bases.")
+    
+    if bases_para_pintar:
+        for b in bases_para_pintar:
+            if b not in st.session_state.cores_transp:
+                st.session_state.cores_transp[b] = '#9b59b6' if is_correios_global(b) else cores_padrao[0]
+            st.session_state.cores_transp[b] = st.color_picker(f"Cor para {b}", st.session_state.cores_transp[b], key=f"cor_custom_{b}")
+    else:
+        st.info("Selecione uma base acima para editar sua cor.")
 
 st.sidebar.markdown("---")
 st.sidebar.info("Para gerar o **relatório visual (PDF)**, dê uma passada rápida pelas abas e depois aperte **`Ctrl + P`** (ou `Cmd + P` no Mac).")
 
-@st.cache_data(show_spinner=False)
-def get_city_coords(cidade, uf):
-    """Busca a coordenada do Município de forma genérica para evitar erros do satélite em bairros não mapeados"""
-    query = f"{cidade}, {uf}, Brasil"
-    res = buscar_coordenadas(query)
-    if res: return res
-    return buscar_coordenadas(f"{cidade}, Brasil")
-
+# --- PREPARAÇÃO DO MAPA CIENTÍFICO ---
 def extrair_pontos_bairros(_gdf_cidade):
     dict_pontos = {}
     for _, row in _gdf_cidade.iterrows():
@@ -1229,37 +1313,30 @@ def extrair_pontos_bairros(_gdf_cidade):
             b_id = row['Chave_Local']
             pts = []
             minx, miny, maxx, maxy = geom.bounds
-            
-            # Semente fixa para que os bairros não mudem de posição a cada F5
             h_bairro = int(hashlib.md5(b_id.encode()).hexdigest(), 16)
             rng = np.random.RandomState(h_bairro % (2**32 - 1))
-            
             attempts = 0
-            while len(pts) < 60 and attempts < 2000:
+            while len(pts) < 15 and attempts < 150:
                 rx = rng.uniform(minx, maxx)
                 ry = rng.uniform(miny, maxy)
                 pnt = Point(rx, ry)
-                # Verifica rigorosamente se o ponto não caiu no mar ou bairro vizinho
                 if geom.contains(pnt):
                     pts.append((ry, rx))
                 attempts += 1
-            
             if not pts:
                 rep = geom.representative_point()
                 pts.append((rep.y, rep.x))
-                
             dict_pontos[b_id] = pts
     return dict_pontos
 
-# Roda livre de cache para não ter problema ao trocar mapas e ficar vazio
 dict_bairros_pontos_espalhados = extrair_pontos_bairros(gdf_cidade)
 
-# Apenas para o Algoritmo da IA e Fallback de Cabeças de CEP
 def extrair_centroides_ia(_gdf_cidade):
     dict_centroids = {}
     for _, row in _gdf_cidade.iterrows():
         if pd.notnull(row['geometry']):
-            dict_centroids[row['Chave_Local']] = (row['geometry'].centroid.y, row['geometry'].centroid.x)
+            pt = row['geometry'].representative_point()
+            dict_centroids[row['Chave_Local']] = (pt.y, pt.x)
     return dict_centroids
 
 dict_bairros_centroides = extrair_centroides_ia(gdf_cidade)
@@ -1285,64 +1362,45 @@ def get_visibilidade(transp):
 
 def render_capacity_warnings(df_cenario, label="Cenário"):
     st.markdown(f"**Verificação de Capacidade - {label}**")
-    
     todas_caps = st.session_state.get('capacidades_bases', {})
     if not any([c for c in todas_caps.values() if c != float('inf')]):
         st.warning("⚠️ Capacidades das bases não informadas. Edite as configurações no menu lateral ou inicie uma nova análise para monitorar os limites operacionais.")
         return
-        
     vol_por_base = df_cenario[df_cenario['Transportadora'] != TAG_MISSORTING].groupby('Transportadora')['Volume'].sum().reset_index()
     vol_por_base['Vol_Dia'] = (vol_por_base['Volume'] / st.session_state.qtd_dias_analise).round(0)
-    
     if vol_por_base.empty: return
-    
     cols = st.columns(len(vol_por_base) if len(vol_por_base) > 0 else 1)
     for i, row in vol_por_base.iterrows():
         base = row['Transportadora']
         if base == 'Regiões sem capacidade': continue
-        
         vdia = row['Vol_Dia']
         cap = st.session_state.capacidades_bases.get(base, 0)
-        
         with cols[i % len(cols)]:
-            if cap == float('inf'):
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
-            elif cap == 0:
-                st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
-            elif vdia <= cap:
-                st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
-            else:
-                st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
+            if cap == float('inf'): st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Ilimitado)*")
+            elif cap == 0: st.info(f"⚪ **{base}**\n\n{vdia:,.0f} pacotes/dia\n*(Não informada)*")
+            elif vdia <= cap: st.success(f"🟢 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia")
+            else: st.error(f"🔴 **{base}**\n\n{vdia:,.0f} / {cap:,.0f} pct/dia\n**(Acima do limite)**")
     st.markdown("<br>", unsafe_allow_html=True)
 
 def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, expandido=False):
-    m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles="CartoDB dark_matter", prefer_canvas=True)
+    tiles_url = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+    attr = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+    m = folium.Map(location=[cy, cx], zoom_start=zoom, tiles=tiles_url, attr=attr, prefer_canvas=True)
     Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m)
 
     try:
         if not gdf_mapa.empty:
             bounds = gdf_mapa.total_bounds
             m.fit_bounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]])
-    except:
-        pass
+    except: pass
 
     tooltip_layer = None
     if not gdf_mapa.empty and 'NM_BAIRRO_STR' in gdf_mapa.columns:
-        tooltip_layer = folium.GeoJsonTooltip(
-            fields=['NM_BAIRRO_STR'], 
-            aliases=['Local (IBGE):'], 
-            style="background-color: white; color: #333; font-family: Inter, sans-serif; font-size: 13px; padding: 5px;"
-        )
-        
+        tooltip_layer = folium.GeoJsonTooltip(fields=['NM_BAIRRO_STR'], aliases=['Local (IBGE):'], style="background-color: white; color: #333; font-family: Inter, sans-serif; font-size: 13px; padding: 5px;")
     if not gdf_mapa.empty:
-        folium.GeoJson(
-            gdf_mapa,
-            style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0},
-            tooltip=tooltip_layer
-        ).add_to(m)
+        folium.GeoJson(gdf_mapa, style_function=lambda x: {'fillColor': 'transparent', 'color': '#555555', 'weight': 1, 'fillOpacity': 0}, tooltip=tooltip_layer).add_to(m)
     
     bairros_selec_safe = globals().get('bairros_selecionados', [])
-    
     cols = list(df_pontos.columns)
     idx_chave_local = cols.index('Chave_Local')
     idx_cidade = cols.index('Cidade')
@@ -1358,26 +1416,19 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
     for row in df_pontos.itertuples(index=False):
         transp = row[idx_transp]
         if not get_visibilidade(transp): continue
-        
         bairro_nome = row[idx_bairro]
         if bairros_selec_safe and bairro_nome not in bairros_selec_safe: continue
-        
         cep = row[idx_cep]
-        if cep not in pontos_por_cep:
-            pontos_por_cep[cep] = []
+        if cep not in pontos_por_cep: pontos_por_cep[cep] = []
         pontos_por_cep[cep].append(row)
         
     markers_data = []
-    
     for cep, rows in pontos_por_cep.items():
         row_ref = rows[0]
         chave_id = row_ref[idx_chave_local]
         cidade_nome = row_ref[idx_cidade]
         cabeca_cep_val = row_ref[idx_cabeca_cep]
-        
-        # Pula a plotagem de bairros não mapeados (Eles aparecerão na métrica de aviso no painel)
-        if chave_id not in dict_bairros_pontos_espalhados:
-            continue
+        if chave_id not in dict_bairros_pontos_espalhados: continue
             
         valid_points = dict_bairros_pontos_espalhados[chave_id]
         h_cep = int(hashlib.md5(str(cep).encode()).hexdigest(), 16)
@@ -1392,16 +1443,10 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         for idx, r_base in enumerate(rows):
             transp = r_base[idx_transp]
             cor = st.session_state.cores_transp.get(transp, '#333333')
-            
             html_tooltip = f"<div style='font-family: Inter, sans-serif; font-size: 13px; min-width: 150px;'><b>CEP:</b> {cep}<br><b>Município:</b> {cidade_nome} - {uf_automatica_ponto}<br><b>Bairro:</b> {r_base[idx_bairro]}<br><b>Transportadora:</b> {transp}<br><b>Volume Base:</b> {r_base[idx_vol]}<br>"
-            
-            if qtd_bases > 1:
-                html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
-            else:
-                html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
-
-            if qtd_real == 1:
-                markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
+            if qtd_bases > 1: html_tooltip += f"<span style='color: #e74c3c;'><b>🚨 Sobreposição:</b> {siglas_parceiros}</span></div>"
+            else: html_tooltip += f"<b>Parceiros:</b> {siglas_parceiros}</div>"
+            if qtd_real == 1: markers_data.append([lat_center, lon_center, cor, 4, html_tooltip])
             else:
                 h_pino = int(hashlib.md5(f"{cep}_{transp}".encode()).hexdigest(), 16)
                 rng_pino = np.random.RandomState(h_pino % (2**32 - 1))
@@ -1415,59 +1460,25 @@ def desenhar_mapa_pinos(df_pontos, gdf_mapa, cy, cx, zoom, pinos_bases=None, exp
         for base, coords in pinos_bases.items():
             if base in transp_selecionadas_sidebar and base != TAG_MISSORTING and base != 'Regiões sem capacidade':
                 cor_base = st.session_state.cores_transp.get(base, '#333333')
-                html_pino = f'''
-                <div style="
-                    background-color: {cor_base};
-                    width: 32px;
-                    height: 32px;
-                    border-radius: 50%;
-                    border: 2px solid white;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    box-shadow: 2px 2px 5px rgba(0,0,0,0.5);
-                    font-size: 16px;
-                ">
-                    🏠
-                </div>
-                '''
-                folium.Marker(
-                    coords,
-                    tooltip=f"🏢 Sede: {base}",
-                    icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))
-                ).add_to(m)
+                html_pino = f'''<div style="background-color: {cor_base}; width: 32px; height: 32px; border-radius: 50%; border: 2px solid white; display: flex; justify-content: center; align-items: center; box-shadow: 2px 2px 5px rgba(0,0,0,0.5); font-size: 16px;">🏠</div>'''
+                folium.Marker(coords, tooltip=f"🏢 Sede: {base}", icon=folium.DivIcon(html=html_pino, icon_size=(32,32), icon_anchor=(16,16))).add_to(m)
             
-    if expandido:
-        folium_static(m, width=1200, height=800)
-    else:
-        folium_static(m, width=700, height=400)
+    if expandido: folium_static(m, width=1200, height=800)
+    else: folium_static(m, width=700, height=400)
 
-# Processamento antecipado de CEPs alterados para exibição imediata no Cenário Simulado
-df_merged_sim = pd.merge(
-    df_cidade_orig[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']],
-    df_cidade_sim[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']],
-    on=['Bairro', 'Cabeca_CEP', COLUNA_CEP],
-    suffixes=('_Atual', '_Simulado')
-)
+df_merged_sim = pd.merge(df_cidade_orig[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume', 'Transportadora']], df_cidade_sim[['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora']], on=['Bairro', 'Cabeca_CEP', COLUNA_CEP], suffixes=('_Atual', '_Simulado'))
 df_changed_sim = df_merged_sim[df_merged_sim['Transportadora_Atual'] != df_merged_sim['Transportadora_Simulado']].copy()
-
 if not df_changed_sim.empty:
-    df_changed_sim.rename(columns={
-        'Transportadora_Atual': 'Transportadora (Cenário Atual)',
-        'Transportadora_Simulado': 'Transportadora (Cenário Simulado)',
-        'Volume': 'Volume Total'
-    }, inplace=True)
+    df_changed_sim.rename(columns={'Transportadora_Atual': 'Transportadora (Cenário Atual)', 'Transportadora_Simulado': 'Transportadora (Cenário Simulado)', 'Volume': 'Volume Total'}, inplace=True)
     dias_analise_tmp = st.session_state.get('qtd_dias_analise', 30)
     df_changed_sim['Volume / Dia'] = (df_changed_sim['Volume Total'] / dias_analise_tmp).round(0)
     df_changed_sim = df_changed_sim.sort_values(by=['Transportadora (Cenário Atual)', 'Bairro', COLUNA_CEP])
-else:
-    df_changed_sim = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
+else: df_changed_sim = pd.DataFrame(columns=['Bairro', 'Cabeca_CEP', COLUNA_CEP, 'Volume Total', 'Volume / Dia', 'Transportadora (Cenário Atual)', 'Transportadora (Cenário Simulado)'])
 
 titulo_app = cidade_selecionada if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else "Visão Regional"
 
 col_t, col_btn = st.columns([4, 1])
-with col_t:
-    st.title(f"Planejamento de Malha: {titulo_app}")
+with col_t: st.title(f"Planejamento de Malha: {titulo_app}")
 with col_btn:
     st.markdown("<br>", unsafe_allow_html=True)
     state_to_save = {
@@ -1484,40 +1495,21 @@ with col_btn:
         'bairros_selecionados_backup': bairros_selecionados
     }
     json_string = json.dumps(state_to_save, ensure_ascii=False, indent=4)
-    
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
         zf.writestr('sessao.json', json_string)
         zf.writestr('volume.xlsx', st.session_state.loaded_excel_bytes)
         zf.writestr('mapa.zip', st.session_state.loaded_ibge_bytes)
-        
     zip_data = buf.getvalue()
-
-    st.download_button(
-        label="💾 Salvar Estado da Análise",
-        data=zip_data,
-        file_name=f"Backup_Malha_{limpa_texto(cidade_selecionada)}.zip",
-        mime="application/zip",
-        use_container_width=True
-    )
+    st.download_button(label="💾 Salvar Estado da Análise", data=zip_data, file_name=f"Backup_Malha_{limpa_texto(cidade_selecionada)}.zip", mime="application/zip", use_container_width=True)
 
 with timer("4. Prepara Pontos de Mapa"):
     df_pontos_orig = prepara_mapa_pontos(df_cidade_orig)
     df_pontos_sim = prepara_mapa_pontos(df_cidade_sim)
 
-# Ajuste da centralização do mapa priorizando o Polígono
-if not gdf_cidade.empty:
-    cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
+if not gdf_cidade.empty: cy, cx = gdf_cidade.geometry.centroid.y.mean(), gdf_cidade.geometry.centroid.x.mean()
 else:
-    # Fallback de centro de acordo com o Estado detectado
-    uf_defaults = {
-        "GO": (-16.6869, -49.2648),
-        "RJ": (-22.9068, -43.1729),
-        "SP": (-23.5505, -46.6333),
-        "DF": (-15.7801, -47.9292),
-        "CE": (-3.7172, -38.5433),
-        "BA": (-12.9714, -38.5014)
-    }
+    uf_defaults = {"GO": (-16.6869, -49.2648), "RJ": (-22.9068, -43.1729), "SP": (-23.5505, -46.6333), "DF": (-15.7801, -47.9292), "CE": (-3.7172, -38.5433), "BA": (-12.9714, -38.5014)}
     cy, cx = uf_defaults.get(uf_automatica, (-15.7801, -47.9292))
 
 zoom_padrao = 11 if st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)" else 8

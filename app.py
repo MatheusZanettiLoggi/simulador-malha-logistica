@@ -749,10 +749,13 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         Fullscreen().add_to(m_br)
 
         if not df_plot.empty:
-            bounds_min_lat, bounds_max_lat = df_plot['latitude'].min(), df_plot['latitude'].max()
-            bounds_min_lon, bounds_max_lon = df_plot['longitude'].min(), df_plot['longitude'].max()
-            if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
-                m_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+            # Filtra outliers geográficos (ex: retornos errados do Nominatim na Europa) apenas para calcular o enquadramento
+            df_bounds = df_plot[(df_plot['latitude'] >= -35) & (df_plot['latitude'] <= 6) & (df_plot['longitude'] >= -75) & (df_plot['longitude'] <= -30)]
+            if not df_bounds.empty:
+                bounds_min_lat, bounds_max_lat = df_bounds['latitude'].min(), df_bounds['latitude'].max()
+                bounds_min_lon, bounds_max_lon = df_bounds['longitude'].min(), df_bounds['longitude'].max()
+                if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
+                    m_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
                 
             vol_por_cidade = df_plot.groupby(['join_city', col_state1])['pct_dia'].sum()
             min_v = vol_por_cidade.min()
@@ -904,10 +907,13 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         Fullscreen().add_to(m_sim_br)
 
         if not df_sim_grouped.empty:
-            bounds_min_lat, bounds_max_lat = df_sim_grouped['latitude'].min(), df_sim_grouped['latitude'].max()
-            bounds_min_lon, bounds_max_lon = df_sim_grouped['longitude'].min(), df_sim_grouped['longitude'].max()
-            if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
-                m_sim_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+            # Filtra outliers geográficos para garantir o foco correto no Brasil
+            df_bounds_sim = df_sim_grouped[(df_sim_grouped['latitude'] >= -35) & (df_sim_grouped['latitude'] <= 6) & (df_sim_grouped['longitude'] >= -75) & (df_sim_grouped['longitude'] <= -30)]
+            if not df_bounds_sim.empty:
+                bounds_min_lat, bounds_max_lat = df_bounds_sim['latitude'].min(), df_bounds_sim['latitude'].max()
+                bounds_min_lon, bounds_max_lon = df_bounds_sim['longitude'].min(), df_bounds_sim['longitude'].max()
+                if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
+                    m_sim_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
 
         markers_data_sim = []
 
@@ -1030,6 +1036,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes['Distância (km)'] = np.round(distances, 1)
                 
                 cols_to_keep = [col_city1, col_state1, col_region, col_service1, col_lmc, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
+                
+                # Garante que a própria lista de colunas não tenha nomes repetidos
+                cols_to_keep = list(dict.fromkeys(cols_to_keep))
                 cols_to_keep = [c for c in cols_to_keep if c in df_redes.columns]
                 
                 df_redes_out = df_redes[cols_to_keep].copy()
@@ -1045,6 +1054,10 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                     }, inplace=True)
                 
                 df_redes_out = df_redes_out.sort_values('Distância (km)')
+                
+                # Remove qualquer coluna duplicada residual antes de mandar para o Streamlit
+                df_redes_out = df_redes_out.loc[:, ~df_redes_out.columns.duplicated()]
+                
                 st.dataframe(df_redes_out, use_container_width=True, hide_index=True)
                 
                 csv = df_redes_out.to_csv(index=False).encode('utf-8')

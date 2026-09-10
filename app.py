@@ -442,6 +442,11 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     col_pacotes = next((c for c in df_volume.columns if 'Pacotes' in c or 'Packages' in c), '# Pacotes')
     col_dias = next((c for c in df_volume.columns if 'dias' in c.lower() or 'days' in c.lower()), '# Dias')
 
+    # Descobre o máximo de dias globais do relatório (ex: 30 dias)
+    max_dias_global = df_volume[col_dias].max()
+    if pd.isna(max_dias_global) or max_dias_global == 0:
+        max_dias_global = 1
+
     df_abrangencia['join_city'] = df_abrangencia[col_city1].apply(limpa_texto)
     df_volume['join_city'] = df_volume[col_city2].apply(limpa_texto)
 
@@ -460,7 +465,9 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
 
     df_merged[col_pacotes] = df_merged[col_pacotes].fillna(0)
     df_merged[col_dias] = df_merged[col_dias].fillna(1)
-    df_merged['pct_dia'] = df_merged[col_pacotes] / df_merged[col_dias]
+    
+    # Divide os pacotes da cidade pelo período total do relatório
+    df_merged['pct_dia'] = df_merged[col_pacotes] / max_dias_global
 
     df_merged['is_loggi'] = df_merged[col_lmc].apply(is_loggi_global)
     df_merged['is_correios'] = df_merged[col_lmc].apply(is_correios_global)
@@ -480,7 +487,7 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
         df_merged['latitude'] = np.nan
         df_merged['longitude'] = np.nan
         
-    return df_merged, col_lmc, col_route1, col_route2, col_region, col_city1, col_state1, col_service1
+    return df_merged, col_lmc, col_route1, col_route2, col_region, col_city1, col_state1, col_service1, col_pacotes, col_dias, max_dias_global
 
 # --- MAIN APP ROUTING ---
 if 'app_mode' not in st.session_state:
@@ -630,7 +637,8 @@ else:
 # ---------------------------------------------------------
 if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     with timer("Carregamento Modo Brasil"):
-        df_br, col_lmc, col_route1, col_route2, col_region, col_city1, col_state1, col_service1 = processar_modo_nacional(
+        # Adicionado o recebimento das novas colunas e do max_dias_global
+        df_br, col_lmc, col_route1, col_route2, col_region, col_city1, col_state1, col_service1, col_pacotes_br, col_dias_br, max_dias_global = processar_modo_nacional(
             st.session_state.loaded_abrangencia, 
             st.session_state.loaded_volume
         )
@@ -641,6 +649,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     col_t, col_btn = st.columns([4, 1])
     with col_t:
         st.title("🗺️ Abrangência de Malha (Visão Nacional)")
+        # Mensagem informativa adicionada no topo de todo o dashboard
+        st.info(f"ℹ️ **Período do Relatório:** Os cálculos de média diária estão considerando o período máximo de **{int(max_dias_global)} dias**.")
+
     with col_btn:
         st.markdown("<br>", unsafe_allow_html=True)
         state_to_save = {
@@ -1035,23 +1046,31 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes['Cidade Própria Mais Próxima'] = closest_cities
                 df_redes['Distância (km)'] = np.round(distances, 1)
                 
-                cols_to_keep = [col_city1, col_state1, col_region, col_service1, col_lmc, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
+                # Inclui as colunas de pacotes totais e dias de entrega
+                cols_to_keep = [col_city1, col_state1, col_region, col_service1, col_lmc, col_pacotes_br, col_dias_br, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
                 
                 # Garante que a própria lista de colunas não tenha nomes repetidos
                 cols_to_keep = list(dict.fromkeys(cols_to_keep))
                 cols_to_keep = [c for c in cols_to_keep if c in df_redes.columns]
                 
                 df_redes_out = df_redes[cols_to_keep].copy()
+                
+                # Renomeia as colunas dinâmicas para ficarem amigáveis na tabela
+                rename_dict = {
+                    col_city1: 'Município',
+                    col_state1: 'Estado',
+                    col_region: 'Região de Preço',
+                    col_service1: 'Tipo de Serviço',
+                    col_lmc: 'Base de Redespacho (Atual)',
+                    'pct_dia': 'Volume (pct/dia)',
+                    col_pacotes_br: 'Total de Pacotes (Período)',
+                    col_dias_br: 'Dias com Entrega'
+                }
+                
                 if 'pct_dia' in df_redes_out.columns:
                     df_redes_out['pct_dia'] = df_redes_out['pct_dia'].round(0).astype(int)
-                    df_redes_out.rename(columns={
-                        col_city1: 'Município',
-                        col_state1: 'Estado',
-                        col_region: 'Região de Preço',
-                        col_service1: 'Tipo de Serviço',
-                        col_lmc: 'Base de Redespacho (Atual)',
-                        'pct_dia': 'Volume (pct/dia)'
-                    }, inplace=True)
+                
+                df_redes_out.rename(columns=rename_dict, inplace=True)
                 
                 df_redes_out = df_redes_out.sort_values('Distância (km)')
                 

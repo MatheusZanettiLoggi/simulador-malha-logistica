@@ -1101,9 +1101,21 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 # BLINDAGEM ABSOLUTA: Construção direta do DataFrame final.
                 # Ignora bugs de renomeação ou colunas ocultas do Pandas.
                 if col_region not in df_redes.columns:
-                    df_redes[col_region] = 'Geral'
+                    # Tenta recuperar a coluna de região da tabela original
+                    if col_region in df_plot.columns:
+                        # Mapeia as regiões com base no join_city
+                        mapa_regioes = df_plot.drop_duplicates('join_city').set_index('join_city')[col_region]
+                        df_redes[col_region] = df_redes['join_city'].map(mapa_regioes).fillna('Geral')
+                    else:
+                        df_redes[col_region] = 'Geral'
+                        
                 if col_service1 not in df_redes.columns:
-                    df_redes[col_service1] = 'Geral'
+                    if col_service1 in df_plot.columns:
+                        mapa_servicos = df_plot.drop_duplicates('join_city').set_index('join_city')[col_service1]
+                        df_redes[col_service1] = df_redes['join_city'].map(mapa_servicos).fillna('Geral')
+                    else:
+                        df_redes[col_service1] = 'Geral'
+                        
                 if col_pacotes_br not in df_redes.columns:
                     df_redes[col_pacotes_br] = 0
                 if col_dias_br not in df_redes.columns:
@@ -1121,6 +1133,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes_out['Base Própria Mais Próxima'] = df_redes['Base Própria Mais Próxima']
                 df_redes_out['Cidade Própria Mais Próxima'] = df_redes['Cidade Própria Mais Próxima']
                 df_redes_out['Distância (km)'] = df_redes['Distância (km)']
+
                 # --- INÍCIO DA BUSCA DE CEPs OFICIAIS ---
                 with st.spinner("Mapeando Ranges de CEP em alta velocidade..."):
                     estados_na_tabela = df_redes_out['Estado'].dropna().unique()

@@ -1098,28 +1098,29 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes['Cidade Própria Mais Próxima'] = closest_cities
                 df_redes['Distância (km)'] = np.round(distances, 1)
                 
-                # Inclui as colunas de pacotes totais e dias de entrega
-                cols_to_keep = [col_city1, col_state1, col_region, col_service1, col_lmc, col_pacotes_br, col_dias_br, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
+                # BLINDAGEM ABSOLUTA: Assegura que as colunas críticas existam no DataFrame *antes* do corte,
+                # e remove qualquer espaço invisível ou quebra de linha que possa quebrar o Pandas.
+                col_region_safe = str(col_region).strip()
+                col_service1_safe = str(col_service1).strip()
                 
-                # Adiciona manualmente as colunas à lista, caso não tenham sido reconhecidas por causa de case-sensitivity
-                if col_region not in cols_to_keep:
-                    cols_to_keep.insert(2, col_region)
-                if col_service1 not in cols_to_keep:
-                    cols_to_keep.insert(3, col_service1)
-                    
+                if col_region not in df_redes.columns:
+                    df_redes[col_region] = df_plot[col_region] if col_region in df_plot.columns else 'Geral'
+                if col_service1 not in df_redes.columns:
+                    df_redes[col_service1] = df_plot[col_service1] if col_service1 in df_plot.columns else 'Geral'
+                
+                # Atualiza os nomes no dataframe caso tenham caracteres invisíveis
+                df_redes.rename(columns={col_region: col_region_safe, col_service1: col_service1_safe}, inplace=True)
+
+                # Inclui as colunas de pacotes totais e dias de entrega
+                cols_to_keep = [col_city1, col_state1, col_region_safe, col_service1_safe, col_lmc, col_pacotes_br, col_dias_br, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
+                
                 # Garante que a própria lista de colunas não tenha nomes repetidos
                 cols_to_keep = list(dict.fromkeys(cols_to_keep))
                 
-                # Modificação principal: Mantém a coluna mesmo se ela veio mesclada ou de outro df original
+                # Remove colunas que genuinamente não existam para não quebrar
                 cols_to_keep = [c for c in cols_to_keep if c in df_redes.columns]
                 
                 df_redes_out = df_redes[cols_to_keep].copy()
-                
-                # Se a proteção Geral foi ativada na função de processamento, garante que ela apareça
-                if col_region not in df_redes_out.columns:
-                    df_redes_out[col_region] = 'Geral'
-                if col_service1 not in df_redes_out.columns:
-                    df_redes_out[col_service1] = 'Geral'
                 
                 # Renomeia as colunas dinâmicas para ficarem amigáveis na tabela
                 rename_dict = {

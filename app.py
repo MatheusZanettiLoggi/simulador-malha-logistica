@@ -1096,11 +1096,25 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 # Inclui as colunas de pacotes totais e dias de entrega
                 cols_to_keep = [col_city1, col_state1, col_region, col_service1, col_lmc, col_pacotes_br, col_dias_br, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
                 
+                # Adiciona manualmente as colunas à lista, caso não tenham sido reconhecidas por causa de case-sensitivity
+                if col_region not in cols_to_keep:
+                    cols_to_keep.insert(2, col_region)
+                if col_service1 not in cols_to_keep:
+                    cols_to_keep.insert(3, col_service1)
+                    
                 # Garante que a própria lista de colunas não tenha nomes repetidos
                 cols_to_keep = list(dict.fromkeys(cols_to_keep))
+                
+                # Modificação principal: Mantém a coluna mesmo se ela veio mesclada ou de outro df original
                 cols_to_keep = [c for c in cols_to_keep if c in df_redes.columns]
                 
                 df_redes_out = df_redes[cols_to_keep].copy()
+                
+                # Se a proteção Geral foi ativada na função de processamento, garante que ela apareça
+                if col_region not in df_redes_out.columns:
+                    df_redes_out[col_region] = 'Geral'
+                if col_service1 not in df_redes_out.columns:
+                    df_redes_out[col_service1] = 'Geral'
                 
                 # Renomeia as colunas dinâmicas para ficarem amigáveis na tabela
                 rename_dict = {

@@ -1071,6 +1071,39 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                     df_redes_out['pct_dia'] = df_redes_out['pct_dia'].round(0).astype(int)
                 
                 df_redes_out.rename(columns=rename_dict, inplace=True)
+
+                # --- INÍCIO DA BUSCA DE CEPs OFICIAIS ---
+                with st.spinner("Mapeando Ranges de CEP em alta velocidade..."):
+                    estados_na_tabela = df_redes_out['Estado'].dropna().unique()
+                    mapa_ceps_min = {}
+                    mapa_ceps_max = {}
+                    faltou_base = False
+                    
+                    for uf_tabela in estados_na_tabela:
+                        # Checa se o arquivo existe antes para não poluir a tela com st.error
+                        caminhos_uf = [f"Base_CEPs_Estados/CEPs_{uf_tabela}.csv.gz", f"CEPs_{uf_tabela}.csv.gz"]
+                        if any(os.path.exists(c) for c in caminhos_uf):
+                            # Como existe, usamos a função do seu próprio app (que já tem cache em memória)
+                            df_ceps_uf = carregar_ceps_estado(uf_tabela)
+                            if not df_ceps_uf.empty and 'municipio' in df_ceps_uf.columns and 'cep' in df_ceps_uf.columns:
+                                df_ceps_uf['mun_limpo'] = df_ceps_uf['municipio'].apply(limpa_texto)
+                                agrupado = df_ceps_uf.groupby('mun_limpo')['cep'].agg(['min', 'max'])
+                                for mun, row_cep in agrupado.iterrows():
+                                    chave = f"{mun}_{uf_tabela}"
+                                    mapa_ceps_min[chave] = formatar_cep(row_cep['min'])
+                                    mapa_ceps_max[chave] = formatar_cep(fechar_buraco_cep(row_cep['max']))
+                        else:
+                            faltou_base = True
+                            
+                    if mapa_ceps_min:
+                        chaves_busca = df_redes_out['Município'].apply(limpa_texto) + "_" + df_redes_out['Estado']
+                        # Insere as colunas de CEP logo após a coluna Estado
+                        df_redes_out.insert(2, 'CEP Inicial', chaves_busca.map(mapa_ceps_min).fillna('Não encontrado'))
+                        df_redes_out.insert(3, 'CEP Final', chaves_busca.map(mapa_ceps_max).fillna('Não encontrado'))
+                        
+                    if faltou_base:
+                        st.info("ℹ️ Alguns ranges de CEP não foram preenchidos porque a base oficial (Correios) de alguns estados não foi encontrada na sua pasta 'Base_CEPs_Estados'.")
+                # --- FIM DA BUSCA DE CEPs OFICIAIS ---
                 
                 df_redes_out = df_redes_out.sort_values('Distância (km)')
                 

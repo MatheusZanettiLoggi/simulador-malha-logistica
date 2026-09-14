@@ -782,7 +782,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_esri, attr=attr_esri, prefer_canvas=True)
         Fullscreen().add_to(m_br)
 
-        if not df_bounds.empty:
+        if not df_plot.empty:
+            df_bounds = df_plot[(df_plot['latitude'] >= -35) & (df_plot['latitude'] <= 6) & (df_plot['longitude'] >= -75) & (df_plot['longitude'] <= -30)]
+            if not df_bounds.empty:
                 bounds_min_lat, bounds_max_lat = df_bounds['latitude'].min(), df_bounds['latitude'].max()
                 bounds_min_lon, bounds_max_lon = df_bounds['longitude'].min(), df_bounds['longitude'].max()
                 if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):

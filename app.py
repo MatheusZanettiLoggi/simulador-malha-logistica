@@ -490,10 +490,17 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     col_pacotes = next((c for c in df_volume.columns if 'PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()), '# Pacotes')
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
+    # Força a conversão das colunas de cálculo para números (caso o Excel venha formatado como texto)
+    if col_pacotes in df_volume.columns:
+        df_volume[col_pacotes] = pd.to_numeric(df_volume[col_pacotes], errors='coerce').fillna(0)
+    if col_dias in df_volume.columns:
+        df_volume[col_dias] = pd.to_numeric(df_volume[col_dias], errors='coerce').fillna(1)
+
     # Descobre o máximo de dias globais do relatório (ex: 30 dias)
     max_dias_global = df_volume[col_dias].max()
     if pd.isna(max_dias_global) or max_dias_global == 0:
         max_dias_global = 1
+        
     df_abrangencia['join_city'] = df_abrangencia[col_city1].apply(limpa_texto)
     df_volume['join_city'] = df_volume[col_city2].apply(limpa_texto)
 
@@ -510,8 +517,9 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
         right_on=[col_route2, 'join_city']
     )
 
-    df_merged[col_pacotes] = df_merged[col_pacotes].fillna(0)
-    df_merged[col_dias] = df_merged[col_dias].fillna(1)
+    # Garante novamente a conversão numérica após o merge e preenche os nulos
+    df_merged[col_pacotes] = pd.to_numeric(df_merged[col_pacotes], errors='coerce').fillna(0)
+    df_merged[col_dias] = pd.to_numeric(df_merged[col_dias], errors='coerce').fillna(1)
     
     # Divide os pacotes da cidade pelo período total do relatório
     df_merged['pct_dia'] = df_merged[col_pacotes] / max_dias_global

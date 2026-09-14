@@ -460,7 +460,7 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
             col_lmc = c
             break
 
-    # 2. Busca rigorosa da Região (Garante que nunca seja a mesma coluna da Base)
+    # 2. Busca rigorosa da Região (Identificará a coluna "Territorial Scope Pricing Regions Pricing Region")
     col_region = 'Pricing Region'
     for c in df_abrangencia.columns:
         c_up = str(c).upper()
@@ -475,11 +475,10 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
                     col_region = c
                     break
     
-    # 3. Proteção: Cria uma região fictícia caso a planilha não tenha a coluna
+    # 3. Proteção: Cria uma região fictícia caso a planilha venha corrompida
     if col_region not in df_abrangencia.columns:
         df_abrangencia[col_region] = 'Geral'
 
-    # Busca abrangente ignorando maiúsculas e minúsculas
     col_route1 = next((c for c in df_abrangencia.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
     col_city1 = next((c for c in df_abrangencia.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
     col_state1 = next((c for c in df_abrangencia.columns if 'STATE' in str(c).upper() or 'ESTADO' in str(c).upper()), 'State')
@@ -490,7 +489,7 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     col_pacotes = next((c for c in df_volume.columns if 'PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()), '# Pacotes')
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
-    # Força a conversão das colunas de cálculo para números (caso o Excel venha formatado como texto)
+    # Força a conversão das colunas de cálculo para números
     if col_pacotes in df_volume.columns:
         df_volume[col_pacotes] = pd.to_numeric(df_volume[col_pacotes], errors='coerce').fillna(0)
     if col_dias in df_volume.columns:
@@ -500,7 +499,7 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     max_dias_global = df_volume[col_dias].max()
     if pd.isna(max_dias_global) or max_dias_global == 0:
         max_dias_global = 1
-        
+
     df_abrangencia['join_city'] = df_abrangencia[col_city1].apply(limpa_texto)
     df_volume['join_city'] = df_volume[col_city2].apply(limpa_texto)
 
@@ -517,7 +516,6 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
         right_on=[col_route2, 'join_city']
     )
 
-    # Garante novamente a conversão numérica após o merge e preenche os nulos
     df_merged[col_pacotes] = pd.to_numeric(df_merged[col_pacotes], errors='coerce').fillna(0)
     df_merged[col_dias] = pd.to_numeric(df_merged[col_dias], errors='coerce').fillna(1)
     

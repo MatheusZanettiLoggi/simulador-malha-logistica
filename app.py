@@ -486,7 +486,10 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
 
     col_route2 = next((c for c in df_volume.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
     col_city2 = next((c for c in df_volume.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
-    col_pacotes = next((c for c in df_volume.columns if 'PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()), '# Pacotes')
+    
+    # O motor de busca agora é obrigado a ignorar colunas de nome para não confundir "Package Name" com Volume
+    col_pacotes = next((c for c in df_volume.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and 'NAME' not in str(c).upper() and 'COMPANY' not in str(c).upper() and 'LMC' not in str(c).upper()), '# Pacotes')
+    
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
     # Força a conversão das colunas de cálculo para números

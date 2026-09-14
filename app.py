@@ -113,13 +113,15 @@ class FitBoundsWhenVisible(MacroElement):
     def __init__(self, bounds):
         super().__init__()
         self._name = 'FitBoundsWhenVisible'
-        self.bounds = bounds
+        # Força a conversão para float nativo e transforma em string JSON para evitar travamento no Javascript
+        bounds_limpos = [[float(bounds[0][0]), float(bounds[0][1])], [float(bounds[1][0]), float(bounds[1][1])]]
+        self.bounds_json = json.dumps(bounds_limpos)
 
     _template = Template(u"""
         {% macro script(this, kwargs) %}
         (function() {
             var map_div = {{ this._parent.get_name() }};
-            var bounds = {{ this.bounds }};
+            var bounds = {{ this.bounds_json }};
             var checkVisibility = setInterval(function() {
                 var container = map_div.getContainer();
                 if (container.clientWidth > 0 && container.clientHeight > 0) {

@@ -1099,37 +1099,46 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes['Distância (km)'] = np.round(distances, 1)
                 
                 # BLINDAGEM ABSOLUTA: Construção direta do DataFrame final.
-                # Ignora bugs de renomeação ou colunas ocultas do Pandas.
-                if col_region not in df_redes.columns:
-                    # Tenta recuperar a coluna de região da tabela original
-                    if col_region in df_plot.columns:
-                        # Mapeia as regiões com base no join_city
-                        mapa_regioes = df_plot.drop_duplicates('join_city').set_index('join_city')[col_region]
-                        df_redes[col_region] = df_redes['join_city'].map(mapa_regioes).fillna('Geral')
-                    else:
-                        df_redes[col_region] = 'Geral'
-                        
-                if col_service1 not in df_redes.columns:
-                    if col_service1 in df_plot.columns:
-                        mapa_servicos = df_plot.drop_duplicates('join_city').set_index('join_city')[col_service1]
-                        df_redes[col_service1] = df_redes['join_city'].map(mapa_servicos).fillna('Geral')
-                    else:
-                        df_redes[col_service1] = 'Geral'
-                        
-                if col_pacotes_br not in df_redes.columns:
-                    df_redes[col_pacotes_br] = 0
-                if col_dias_br not in df_redes.columns:
-                    df_redes[col_dias_br] = 1
+                
+                # Busca a coluna EXATA que o usuário pediu para a Região de Preço
+                coluna_regiao_exata = None
+                for c in df_redes.columns:
+                    if "Territorial Scope Pricing Regions Pricing Region" in str(c):
+                        coluna_regiao_exata = c
+                        break
+                
+                # Se não achar o nome gigante, procura qualquer uma de "Pricing" que NÃO seja igual a coluna LMC
+                if not coluna_regiao_exata:
+                    for c in df_redes.columns:
+                        if ('PRICING' in str(c).upper() or 'PREÇO' in str(c).upper()) and c != col_lmc:
+                            coluna_regiao_exata = c
+                            break
+                            
+                # Se ainda não achar, usa o fallback geral
+                if not coluna_regiao_exata:
+                    coluna_regiao_exata = col_region
 
                 df_redes_out = pd.DataFrame()
                 df_redes_out['Município'] = df_redes[col_city1]
                 df_redes_out['Estado'] = df_redes[col_state1]
-                df_redes_out['Região de Preço'] = df_redes[col_region]
-                df_redes_out['Tipo de Serviço'] = df_redes[col_service1]
+                
+                # Preenche a Região de Preço com a coluna blindada recém-encontrada
+                if coluna_regiao_exata in df_redes.columns:
+                    df_redes_out['Região de Preço'] = df_redes[coluna_regiao_exata]
+                else:
+                    df_redes_out['Região de Preço'] = 'Geral'
+                    
+                df_redes_out['Tipo de Serviço'] = df_redes[col_service1] if col_service1 in df_redes.columns else 'Geral'
                 df_redes_out['Base de Redespacho (Atual)'] = df_redes[col_lmc]
-                df_redes_out['Total de Pacotes (Período)'] = df_redes[col_pacotes_br]
-                df_redes_out['Dias com Entrega'] = df_redes[col_dias_br]
+                
+                # Preenche pacotes e dias
+                col_pacotes_br_safe = col_pacotes_br if col_pacotes_br in df_redes.columns else col_pacotes
+                col_dias_br_safe = col_dias_br if col_dias_br in df_redes.columns else col_dias
+                
+                df_redes_out['Total de Pacotes (Período)'] = df_redes[col_pacotes_br_safe] if col_pacotes_br_safe in df_redes.columns else 0
+                df_redes_out['Dias com Entrega'] = df_redes[col_dias_br_safe] if col_dias_br_safe in df_redes.columns else 1
                 df_redes_out['Volume (pct/dia)'] = df_redes['pct_dia'].round(0).astype(int) if 'pct_dia' in df_redes.columns else 0
+                
                 df_redes_out['Base Própria Mais Próxima'] = df_redes['Base Própria Mais Próxima']
                 df_redes_out['Cidade Própria Mais Próxima'] = df_redes['Cidade Própria Mais Próxima']
                 df_redes_out['Distância (km)'] = df_redes['Distância (km)']

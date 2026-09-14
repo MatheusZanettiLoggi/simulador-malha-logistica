@@ -1098,47 +1098,29 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes['Cidade Própria Mais Próxima'] = closest_cities
                 df_redes['Distância (km)'] = np.round(distances, 1)
                 
-                # BLINDAGEM ABSOLUTA: Assegura que as colunas críticas existam no DataFrame *antes* do corte,
-                # e remove qualquer espaço invisível ou quebra de linha que possa quebrar o Pandas.
-                col_region_safe = str(col_region).strip()
-                col_service1_safe = str(col_service1).strip()
-                
+                # BLINDAGEM ABSOLUTA: Construção direta do DataFrame final.
+                # Ignora bugs de renomeação ou colunas ocultas do Pandas.
                 if col_region not in df_redes.columns:
-                    df_redes[col_region] = df_plot[col_region] if col_region in df_plot.columns else 'Geral'
+                    df_redes[col_region] = 'Geral'
                 if col_service1 not in df_redes.columns:
-                    df_redes[col_service1] = df_plot[col_service1] if col_service1 in df_plot.columns else 'Geral'
-                
-                # Atualiza os nomes no dataframe caso tenham caracteres invisíveis
-                df_redes.rename(columns={col_region: col_region_safe, col_service1: col_service1_safe}, inplace=True)
+                    df_redes[col_service1] = 'Geral'
+                if col_pacotes_br not in df_redes.columns:
+                    df_redes[col_pacotes_br] = 0
+                if col_dias_br not in df_redes.columns:
+                    df_redes[col_dias_br] = 1
 
-                # Inclui as colunas de pacotes totais e dias de entrega
-                cols_to_keep = [col_city1, col_state1, col_region_safe, col_service1_safe, col_lmc, col_pacotes_br, col_dias_br, 'pct_dia', 'Base Própria Mais Próxima', 'Cidade Própria Mais Próxima', 'Distância (km)']
-                
-                # Garante que a própria lista de colunas não tenha nomes repetidos
-                cols_to_keep = list(dict.fromkeys(cols_to_keep))
-                
-                # Remove colunas que genuinamente não existam para não quebrar
-                cols_to_keep = [c for c in cols_to_keep if c in df_redes.columns]
-                
-                df_redes_out = df_redes[cols_to_keep].copy()
-                
-                # Renomeia as colunas dinâmicas para ficarem amigáveis na tabela
-                rename_dict = {
-                    col_city1: 'Município',
-                    col_state1: 'Estado',
-                    col_region: 'Região de Preço',
-                    col_service1: 'Tipo de Serviço',
-                    col_lmc: 'Base de Redespacho (Atual)',
-                    'pct_dia': 'Volume (pct/dia)',
-                    col_pacotes_br: 'Total de Pacotes (Período)',
-                    col_dias_br: 'Dias com Entrega'
-                }
-                
-                if 'pct_dia' in df_redes_out.columns:
-                    df_redes_out['pct_dia'] = df_redes_out['pct_dia'].round(0).astype(int)
-                
-                df_redes_out.rename(columns=rename_dict, inplace=True)
-
+                df_redes_out = pd.DataFrame()
+                df_redes_out['Município'] = df_redes[col_city1]
+                df_redes_out['Estado'] = df_redes[col_state1]
+                df_redes_out['Região de Preço'] = df_redes[col_region]
+                df_redes_out['Tipo de Serviço'] = df_redes[col_service1]
+                df_redes_out['Base de Redespacho (Atual)'] = df_redes[col_lmc]
+                df_redes_out['Total de Pacotes (Período)'] = df_redes[col_pacotes_br]
+                df_redes_out['Dias com Entrega'] = df_redes[col_dias_br]
+                df_redes_out['Volume (pct/dia)'] = df_redes['pct_dia'].round(0).astype(int) if 'pct_dia' in df_redes.columns else 0
+                df_redes_out['Base Própria Mais Próxima'] = df_redes['Base Própria Mais Próxima']
+                df_redes_out['Cidade Própria Mais Próxima'] = df_redes['Cidade Própria Mais Próxima']
+                df_redes_out['Distância (km)'] = df_redes['Distância (km)']
                 # --- INÍCIO DA BUSCA DE CEPs OFICIAIS ---
                 with st.spinner("Mapeando Ranges de CEP em alta velocidade..."):
                     estados_na_tabela = df_redes_out['Estado'].dropna().unique()

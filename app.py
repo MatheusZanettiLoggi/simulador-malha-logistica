@@ -108,6 +108,29 @@ class FastNationalMarkers(MacroElement):
         {% endmacro %}
     """)
 
+class FitBoundsWhenVisible(MacroElement):
+    """Garante que o Folium calcule o zoom apenas quando a aba for clicada/visível."""
+    def __init__(self, bounds):
+        super().__init__()
+        self._name = 'FitBoundsWhenVisible'
+        self.bounds = bounds
+
+    _template = Template(u"""
+        {% macro script(this, kwargs) %}
+        (function() {
+            var map_div = {{ this._parent.get_name() }};
+            var bounds = {{ this.bounds }};
+            var checkVisibility = setInterval(function() {
+                var container = map_div.getContainer();
+                if (container.clientWidth > 0 && container.clientHeight > 0) {
+                    clearInterval(checkVisibility);
+                    map_div.invalidateSize();
+                    map_div.fitBounds(bounds);
+                }
+            }, 100);
+        })();
+        {% endmacro %}
+    """)
 
 COLUNA_CEP = 'Package Register CEP de Entrega'
 ARQUIVO_DE_PARA = 'de_para_bairros.json'
@@ -759,14 +782,11 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_esri, attr=attr_esri, prefer_canvas=True)
         Fullscreen().add_to(m_br)
 
-        if not df_plot.empty:
-            # Filtra outliers geográficos (ex: retornos errados do Nominatim na Europa) apenas para calcular o enquadramento
-            df_bounds = df_plot[(df_plot['latitude'] >= -35) & (df_plot['latitude'] <= 6) & (df_plot['longitude'] >= -75) & (df_plot['longitude'] <= -30)]
-            if not df_bounds.empty:
+        if not df_bounds.empty:
                 bounds_min_lat, bounds_max_lat = df_bounds['latitude'].min(), df_bounds['latitude'].max()
                 bounds_min_lon, bounds_max_lon = df_bounds['longitude'].min(), df_bounds['longitude'].max()
                 if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
-                    m_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+                    FitBoundsWhenVisible([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]]).add_to(m_br)
                 
             vol_por_cidade = df_plot.groupby(['join_city', col_state1])['pct_dia'].sum()
             min_v = vol_por_cidade.min()
@@ -924,7 +944,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 bounds_min_lat, bounds_max_lat = df_bounds_sim['latitude'].min(), df_bounds_sim['latitude'].max()
                 bounds_min_lon, bounds_max_lon = df_bounds_sim['longitude'].min(), df_bounds_sim['longitude'].max()
                 if pd.notna(bounds_min_lat) and pd.notna(bounds_max_lat):
-                    m_sim_br.fit_bounds([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]])
+                    FitBoundsWhenVisible([[bounds_min_lat, bounds_min_lon], [bounds_max_lat, bounds_max_lon]]).add_to(m_sim_br)
 
         markers_data_sim = []
 

@@ -453,19 +453,22 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     df_abrangencia = pd.read_excel(io.BytesIO(abrangencia_bytes))
     df_volume = pd.read_excel(io.BytesIO(volume_bytes))
     
-    col_lmc = next((c for c in df_abrangencia.columns if 'LMC' in c), 'LMC Name')
-    col_route1 = next((c for c in df_abrangencia.columns if 'Routing' in c), 'Routing Code')
+    # --- BUSCA MAIS INTELIGENTE PARA AS COLUNAS (Ignora letras maiúsculas/minúsculas) ---
+    col_lmc = next((c for c in df_abrangencia.columns if 'LMC' in str(c).upper() or 'BASE' in str(c).upper()), 'LMC Name')
+    col_route1 = next((c for c in df_abrangencia.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
     
-    col_region = next((c for c in df_abrangencia.columns if ('Região' in c or 'Pricing Region' in c) and 'City' not in c and 'State' not in c and 'Cidade' not in c and 'Estado' not in c), 'Pricing Region')
+    # Obriga a procurar por 'Pricing' ou 'Preço' para não pegar colunas genéricas como 'Macro Região'
+    col_region = next((c for c in df_abrangencia.columns if 'PRICING' in str(c).upper() or 'PREÇO' in str(c).upper() or 'PRECO' in str(c).upper()), 
+                      next((c for c in df_abrangencia.columns if 'REGIÃO' in str(c).upper() or 'REGIAO' in str(c).upper() and 'CITY' not in str(c).upper() and 'STATE' not in str(c).upper()), 'Pricing Region'))
     
-    col_city1 = next((c for c in df_abrangencia.columns if 'City' in c or 'Cidade' in c), 'City')
-    col_state1 = next((c for c in df_abrangencia.columns if 'State' in c or 'Estado' in c), 'State')
-    col_service1 = next((c for c in df_abrangencia.columns if 'Service' in c or 'Serviço' in c), 'Service Type')
+    col_city1 = next((c for c in df_abrangencia.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
+    col_state1 = next((c for c in df_abrangencia.columns if 'STATE' in str(c).upper() or 'ESTADO' in str(c).upper()), 'State')
+    col_service1 = next((c for c in df_abrangencia.columns if 'SERVICE' in str(c).upper() or 'SERVIÇ' in str(c).upper() or 'SERVIC' in str(c).upper()), 'Service Type')
 
-    col_route2 = next((c for c in df_volume.columns if 'Routing' in c), 'Routing Code')
-    col_city2 = next((c for c in df_volume.columns if 'Cidade' in c or 'City' in c), 'City')
-    col_pacotes = next((c for c in df_volume.columns if 'Pacotes' in c or 'Packages' in c), '# Pacotes')
-    col_dias = next((c for c in df_volume.columns if 'dias' in c.lower() or 'days' in c.lower()), '# Dias')
+    col_route2 = next((c for c in df_volume.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
+    col_city2 = next((c for c in df_volume.columns if 'CIDADE' in str(c).upper() or 'CITY' in str(c).upper()), 'City')
+    col_pacotes = next((c for c in df_volume.columns if 'PACOTES' in str(c).upper() or 'PACKAGES' in str(c).upper()), '# Pacotes')
+    col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
     # Descobre o máximo de dias globais do relatório (ex: 30 dias)
     max_dias_global = df_volume[col_dias].max()

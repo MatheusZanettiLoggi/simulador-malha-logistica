@@ -460,7 +460,7 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
             col_lmc = c
             break
 
-    # 2. Busca rigorosa da Região (Identificará a coluna "Territorial Scope Pricing Regions Pricing Region")
+    # 2. Busca rigorosa da Região
     col_region = 'Pricing Region'
     for c in df_abrangencia.columns:
         c_up = str(c).upper()
@@ -475,7 +475,6 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
                     col_region = c
                     break
     
-    # 3. Proteção: Cria uma região fictícia caso a planilha venha corrompida
     if col_region not in df_abrangencia.columns:
         df_abrangencia[col_region] = 'Geral'
 
@@ -489,13 +488,11 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     col_pacotes = next((c for c in df_volume.columns if 'PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()), '# Pacotes')
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
-    # Força a conversão das colunas de cálculo para números
     if col_pacotes in df_volume.columns:
         df_volume[col_pacotes] = pd.to_numeric(df_volume[col_pacotes], errors='coerce').fillna(0)
     if col_dias in df_volume.columns:
         df_volume[col_dias] = pd.to_numeric(df_volume[col_dias], errors='coerce').fillna(1)
 
-    # Descobre o máximo de dias globais do relatório (ex: 30 dias)
     max_dias_global = df_volume[col_dias].max()
     if pd.isna(max_dias_global) or max_dias_global == 0:
         max_dias_global = 1
@@ -519,7 +516,6 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     df_merged[col_pacotes] = pd.to_numeric(df_merged[col_pacotes], errors='coerce').fillna(0)
     df_merged[col_dias] = pd.to_numeric(df_merged[col_dias], errors='coerce').fillna(1)
     
-    # Divide os pacotes da cidade pelo período total do relatório
     df_merged['pct_dia'] = df_merged[col_pacotes] / max_dias_global
 
     df_merged['is_loggi'] = df_merged[col_lmc].apply(is_loggi_global)
@@ -541,7 +537,6 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
         df_merged['longitude'] = np.nan
         
     return df_merged, col_lmc, col_route1, col_route2, col_region, col_city1, col_state1, col_service1, col_pacotes, col_dias, max_dias_global
-
 # --- MAIN APP ROUTING ---
 if 'app_mode' not in st.session_state:
     st.session_state.app_mode = 'home'

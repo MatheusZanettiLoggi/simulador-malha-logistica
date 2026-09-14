@@ -453,28 +453,47 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     df_abrangencia = pd.read_excel(io.BytesIO(abrangencia_bytes))
     df_volume = pd.read_excel(io.BytesIO(volume_bytes))
     
-    # --- BUSCA MAIS INTELIGENTE PARA AS COLUNAS (Ignora letras maiúsculas/minúsculas) ---
-    col_lmc = next((c for c in df_abrangencia.columns if 'LMC' in str(c).upper() or 'BASE' in str(c).upper()), 'LMC Name')
+    # 1. Busca rigorosa da Base LMC
+    col_lmc = 'LMC Name'
+    for c in df_abrangencia.columns:
+        if 'LMC' in str(c).upper() or 'BASE' in str(c).upper():
+            col_lmc = c
+            break
+
+    # 2. Busca rigorosa da Região (Garante que nunca seja a mesma coluna da Base)
+    col_region = 'Pricing Region'
+    for c in df_abrangencia.columns:
+        c_up = str(c).upper()
+        if 'PRICING' in c_up or 'PREÇO' in c_up or 'PRECO' in c_up:
+            col_region = c
+            break
+    else:
+        for c in df_abrangencia.columns:
+            c_up = str(c).upper()
+            if ('REGIÃO' in c_up or 'REGIAO' in c_up or 'REGION' in c_up or 'MACRO' in c_up):
+                if c != col_lmc and 'CITY' not in c_up and 'STATE' not in c_up and 'CIDADE' not in c_up and 'ESTADO' not in c_up:
+                    col_region = c
+                    break
+    
+    # 3. Proteção: Cria uma região fictícia caso a planilha não tenha a coluna
+    if col_region not in df_abrangencia.columns:
+        df_abrangencia[col_region] = 'Geral'
+
+    # Busca abrangente ignorando maiúsculas e minúsculas
     col_route1 = next((c for c in df_abrangencia.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
-    
-    # Obriga a procurar por 'Pricing' ou 'Preço' para não pegar colunas genéricas como 'Macro Região'
-    col_region = next((c for c in df_abrangencia.columns if 'PRICING' in str(c).upper() or 'PREÇO' in str(c).upper() or 'PRECO' in str(c).upper()), 
-                      next((c for c in df_abrangencia.columns if 'REGIÃO' in str(c).upper() or 'REGIAO' in str(c).upper() and 'CITY' not in str(c).upper() and 'STATE' not in str(c).upper()), 'Pricing Region'))
-    
     col_city1 = next((c for c in df_abrangencia.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
     col_state1 = next((c for c in df_abrangencia.columns if 'STATE' in str(c).upper() or 'ESTADO' in str(c).upper()), 'State')
     col_service1 = next((c for c in df_abrangencia.columns if 'SERVICE' in str(c).upper() or 'SERVIÇ' in str(c).upper() or 'SERVIC' in str(c).upper()), 'Service Type')
 
     col_route2 = next((c for c in df_volume.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
-    col_city2 = next((c for c in df_volume.columns if 'CIDADE' in str(c).upper() or 'CITY' in str(c).upper()), 'City')
-    col_pacotes = next((c for c in df_volume.columns if 'PACOTES' in str(c).upper() or 'PACKAGES' in str(c).upper()), '# Pacotes')
+    col_city2 = next((c for c in df_volume.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
+    col_pacotes = next((c for c in df_volume.columns if 'PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()), '# Pacotes')
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 
     # Descobre o máximo de dias globais do relatório (ex: 30 dias)
     max_dias_global = df_volume[col_dias].max()
     if pd.isna(max_dias_global) or max_dias_global == 0:
         max_dias_global = 1
-
     df_abrangencia['join_city'] = df_abrangencia[col_city1].apply(limpa_texto)
     df_volume['join_city'] = df_volume[col_city2].apply(limpa_texto)
 

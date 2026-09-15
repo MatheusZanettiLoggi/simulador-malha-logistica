@@ -467,20 +467,27 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
             col_lmc = c
             break
 
-    # 2. Busca rigorosa da Região (Identificará a coluna "Territorial Scope Pricing Regions Pricing Region")
+    # 2. Busca rigorosa da Região (Garante que não puxe "Pricing Regions LMC Name" por acidente)
     col_region = 'Pricing Region'
-    for c in df_abrangencia.columns:
-        c_up = str(c).upper()
-        if 'PRICING' in c_up or 'PREÇO' in c_up or 'PRECO' in c_up:
-            col_region = c
-            break
+    
+    # Tenta o nome exato primeiro, que sabemos que é o padrão do Looker
+    match_exato = [c for c in df_abrangencia.columns if "Territorial Scope Pricing Regions Pricing Region" in str(c)]
+    if match_exato:
+        col_region = match_exato[0]
     else:
         for c in df_abrangencia.columns:
             c_up = str(c).upper()
-            if ('REGIÃO' in c_up or 'REGIAO' in c_up or 'REGION' in c_up or 'MACRO' in c_up):
-                if c != col_lmc and 'CITY' not in c_up and 'STATE' not in c_up and 'CIDADE' not in c_up and 'ESTADO' not in c_up:
-                    col_region = c
-                    break
+            # Impede que a palavra "Pricing" puxe a coluna de LMC ou Company Name
+            if ('PRICING' in c_up or 'PREÇO' in c_up or 'PRECO' in c_up) and c != col_lmc and 'LMC' not in c_up and 'NAME' not in c_up and 'COMPANY' not in c_up:
+                col_region = c
+                break
+        else:
+            for c in df_abrangencia.columns:
+                c_up = str(c).upper()
+                if ('REGIÃO' in c_up or 'REGIAO' in c_up or 'REGION' in c_up or 'MACRO' in c_up):
+                    if c != col_lmc and 'CITY' not in c_up and 'STATE' not in c_up and 'CIDADE' not in c_up and 'ESTADO' not in c_up:
+                        col_region = c
+                        break
     
     # 3. Proteção: Cria uma região fictícia caso a planilha venha corrompida
     if col_region not in df_abrangencia.columns:

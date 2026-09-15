@@ -898,7 +898,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             st.dataframe(df_table, use_container_width=True, hide_index=True)
 
         st.markdown("### 🗂️ Visão Tabular Detalhada")
-        cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route']
+        cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
         if 'pct_dia' in df_completa.columns:
             df_completa['pct_dia'] = df_completa['pct_dia'].round(0).astype(int)

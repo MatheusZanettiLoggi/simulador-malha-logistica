@@ -809,18 +809,40 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot['ID_Row'] = df_plot.index
     
     # -----------------------------------------------
-    # Cores Personalizáveis
+    # Cores Personalizáveis & Lógica de Contraste Geográfico
     # -----------------------------------------------
     if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
         
-    cores_padrao_br = ['#3498db', '#e67e22', '#e74c3c', '#2ecc71', '#f1c40f', '#1abc9c', '#fdcb6e', '#ff9ff3', '#00cec9', '#fab1a0', '#74b9ff', '#a29bfe', '#dfe6e9']
     bases_ativas_br = sorted(df_br['Base_Route'].dropna().unique())
     
-    idx_cor = 0
+    # HSL Colors fixas, bem espaçadas para contraste (Evita a vizinhança monocromática)
+    paleta_contraste = ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#a9a9a9']
+    
+    # Gera um centro de massa (Baricentro logístico) do Brasil para criar os vetores de cor
+    centro_lat = df_plot['latitude'].mean() if not df_plot.empty else -15.0
+    centro_lon = df_plot['longitude'].mean() if not df_plot.empty else -50.0
+
     for b in bases_ativas_br:
         if b not in st.session_state.cores_transp:
-            st.session_state.cores_transp[b] = '#000000' if is_correios_global(b) else cores_padrao_br[idx_cor % len(cores_padrao_br)]
-            idx_cor += 1
+            if is_correios_global(b):
+                st.session_state.cores_transp[b] = '#000000' # Correios sempre preto
+            else:
+                # Lógica: Pega a lat/lon média das entregas dessa base específica
+                base_dados = df_br[df_br['Base_Route'] == b]
+                if not base_dados.empty:
+                    lat_b = base_dados['latitude'].mean()
+                    lon_b = base_dados['longitude'].mean()
+                    # Calcula o ângulo HSL baseado na posição para forçar cores diferentes
+                    angulo = np.arctan2(lat_b - centro_lat, lon_b - centro_lon)
+                    # Usa o ângulo para pescar uma cor diferente na paleta
+                    idx_calc = int((angulo + np.pi) / (2 * np.pi) * len(paleta_contraste))
+                    
+                    # Adiciona um hash secundário para diferenciar bases na mesma cidade
+                    hash_b = int(hashlib.md5(b.encode()).hexdigest(), 16) % len(paleta_contraste)
+                    
+                    st.session_state.cores_transp[b] = paleta_contraste[(idx_calc + hash_b) % len(paleta_contraste)]
+                else:
+                    st.session_state.cores_transp[b] = '#333333'
             
     with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
         bases_para_pintar = st.multiselect("🔍 Busque e selecione a(s) Base(s):", bases_ativas_br, help="Digite para buscar e selecione as bases.")
@@ -898,6 +920,24 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             markers_data_atual.append([lat, lon, cor, opacity, raio_px, font_size, tooltip_html, has_dupe_text, border_op])
 
         FastNationalMarkers(json.dumps(markers_data_atual)).add_to(m_br)
+
+        # Injeta a legenda inteligente
+        bases_no_mapa = df_plot['Base_Route'].unique()
+        df_vol_bases = df_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
+        top_bases = df_vol_bases.head(20).index.tolist()
+        
+        st.markdown("<br>**Legenda de Cores (Principais Bases):**", unsafe_allow_html=True)
+        leg_html = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px; margin-bottom: 20px;'>"
+        for b in top_bases:
+            cor_b = st.session_state.cores_transp.get(b, '#333333')
+            leg_html += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor_b}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{b}</span></div>"
+        
+        if len(bases_no_mapa) > 20:
+            leg_html += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa) - 20} bases menores na região.</span></div>"
+            st.info("ℹ️ Para ter um detalhamento exato das cores de todas as bases, aplique os filtros acima para analisar uma região menor.")
+            
+        leg_html += "</div>"
+        st.markdown(leg_html, unsafe_allow_html=True)
 
         df_table = df_plot.groupby('Base_Route').agg(
             Volume_Dia=('pct_dia', 'sum'),

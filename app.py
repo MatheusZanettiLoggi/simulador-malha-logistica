@@ -350,6 +350,7 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Chave_Local', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
 
 @st.cache_data
+@st.cache_data
 def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
@@ -369,9 +370,11 @@ def load_dados(excel_file, zip_file, modo):
     if 'Package Register Routing Code De Entrega' in df.columns: col_routing = 'Package Register Routing Code De Entrega'
     else: col_routing = 'Package Planned DC Routing Code'
 
-    if 'Package Register # Pacotes' in df.columns: col_vol = 'Package Register # Pacotes'
-    else: col_vol = 'Package # Packages'
-    
+    # Busca segura da coluna de pacotes, garantindo que não puxe nomes de empresas por engano
+    if 'Package Register # Pacotes' in df.columns: 
+        col_vol = 'Package Register # Pacotes'
+    else: 
+        col_vol = next((c for c in df.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and 'NAME' not in str(c).upper() and 'COMPANY' not in str(c).upper()), 'Package # Packages')    
     qtd_dias = 30
     if col_data in df.columns:
         try:
@@ -522,7 +525,11 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     df_merged[col_pacotes] = pd.to_numeric(df_merged[col_pacotes], errors='coerce').fillna(0)
     df_merged[col_dias] = pd.to_numeric(df_merged[col_dias], errors='coerce').fillna(1)
     
-    # Divide os pacotes da cidade pelo período total do relatório
+    # SALVA OS PACOTES GLOBAIS NA LINHA (Para uso posterior na tabela de expansão)
+    df_merged['Total_Pacotes_Bruto'] = df_merged[col_pacotes]
+    df_merged['Total_Dias_Bruto'] = df_merged[col_dias]
+    
+    # Divide os pacotes da cidade pelo período total do relatório para plotar as bolinhas corretamente
     df_merged['pct_dia'] = df_merged[col_pacotes] / max_dias_global
 
     df_merged['is_loggi'] = df_merged[col_lmc].apply(is_loggi_global)
@@ -1134,12 +1141,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 df_redes_out['Tipo de Serviço'] = df_redes[col_service1] if col_service1 in df_redes.columns else 'Geral'
                 df_redes_out['Base de Redespacho (Atual)'] = df_redes[col_lmc]
                 
-                # Preenche pacotes e dias
-                col_pacotes_br_safe = col_pacotes_br if col_pacotes_br in df_redes.columns else col_pacotes
-                col_dias_br_safe = col_dias_br if col_dias_br in df_redes.columns else col_dias
-                
-                df_redes_out['Total de Pacotes (Período)'] = df_redes[col_pacotes_br_safe] if col_pacotes_br_safe in df_redes.columns else 0
-                df_redes_out['Dias com Entrega'] = df_redes[col_dias_br_safe] if col_dias_br_safe in df_redes.columns else 1
+                # Puxa as colunas absolutas que acabamos de blindar na função de processamento principal
+                df_redes_out['Total de Pacotes (Período)'] = df_redes['Total_Pacotes_Bruto'] if 'Total_Pacotes_Bruto' in df_redes.columns else 0
+                df_redes_out['Dias com Entrega'] = df_redes['Total_Dias_Bruto'] if 'Total_Dias_Bruto' in df_redes.columns else 1
                 df_redes_out['Volume (pct/dia)'] = df_redes['pct_dia'].round(0).astype(int) if 'pct_dia' in df_redes.columns else 0
                 
                 df_redes_out['Base Própria Mais Próxima'] = df_redes['Base Própria Mais Próxima']

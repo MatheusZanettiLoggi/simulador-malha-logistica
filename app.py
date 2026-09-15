@@ -492,6 +492,8 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     # 3. Proteção: Cria uma região fictícia caso a planilha venha corrompida
     if col_region not in df_abrangencia.columns:
         df_abrangencia[col_region] = 'Geral'
+    else:
+        df_abrangencia[col_region] = df_abrangencia[col_region].astype(str)
 
     col_route1 = next((c for c in df_abrangencia.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
     col_city1 = next((c for c in df_abrangencia.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
@@ -763,7 +765,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         
     col_f4, col_f5, col_f6 = st.columns(3)
     with col_f4:
-        f_regioes = st.multiselect("Região de Preço:", sorted(df_br[col_region].astype(str).unique()))
+        f_regioes = st.multiselect("Região de Preço:", sorted([str(x) for x in df_br[col_region].dropna().unique() if str(x).strip() != 'nan']))
     with col_f5:
         f_servicos = st.multiselect("Tipo de Serviço:", sorted(df_br[col_service1].astype(str).unique()))
     with col_f6:

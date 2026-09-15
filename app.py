@@ -525,9 +525,9 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     df_merged[col_pacotes] = pd.to_numeric(df_merged[col_pacotes], errors='coerce').fillna(0)
     df_merged[col_dias] = pd.to_numeric(df_merged[col_dias], errors='coerce').fillna(1)
     
-    # SALVA OS PACOTES GLOBAIS NA LINHA (Para uso posterior na tabela de expansão)
-    df_merged['Total_Pacotes_Bruto'] = df_merged[col_pacotes]
-    df_merged['Total_Dias_Bruto'] = df_merged[col_dias]
+    # SALVA OS PACOTES GLOBAIS NA LINHA (Usa loc para evitar erro de duplicidade se rodado duas vezes no cache)
+    df_merged.loc[:, 'Total_Pacotes_Bruto'] = df_merged[col_pacotes]
+    df_merged.loc[:, 'Total_Dias_Bruto'] = df_merged[col_dias]
     
     # Divide os pacotes da cidade pelo período total do relatório para plotar as bolinhas corretamente
     df_merged['pct_dia'] = df_merged[col_pacotes] / max_dias_global

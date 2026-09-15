@@ -809,66 +809,44 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot['ID_Row'] = df_plot.index
     
     # -----------------------------------------------
-    # Cores Personalizáveis & Lógica de Contraste Geográfico Dinâmico (HSL Esférico Otimizado)
+    # Cores Personalizáveis & Lógica de Contraste (Hash Spacing Uniforme)
     # -----------------------------------------------
     import colorsys
     
     if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
         
     bases_ativas_br = sorted(df_plot['Base_Route'].dropna().unique())
-    
-    # Usa o Baricentro MÓVEL, atualizando o centroide apenas para a região visível atual
-    centro_lat = df_plot['latitude'].mean() if not df_plot.empty else -15.0
-    centro_lon = df_plot['longitude'].mean() if not df_plot.empty else -50.0
+    total_bases = len(bases_ativas_br)
 
     # Força a recalcular as cores caso o usuário filtre regiões diferentes para sempre ter contraste máximo
     st.session_state.cores_transp = {} 
 
-    # Agrupa bases por município (join_city) para forçar o espalhamento de matiz (Hue)
-    municipios_com_bases = df_plot.groupby('join_city')['Base_Route'].unique().to_dict()
+    # Se houver apenas 1 base, evita divisão por zero
+    passo_hue = 1.0 / total_bases if total_bases > 0 else 1.0
     
-    # Fator de espalhamento aleatório (golden ratio) para separar cores muito próximas no espectro
+    # Golden ratio estrito para espalhar as cores na sequência
     golden_ratio_conjugate = 0.618033988749895
+    hue_atual = random.random() # Ponto de partida aleatório para variar as paletas a cada filtro
 
-    for b in bases_ativas_br:
+    for idx, b in enumerate(bases_ativas_br):
         if b not in st.session_state.cores_transp:
             if is_correios_global(b):
                 st.session_state.cores_transp[b] = '#000000' # Correios sempre preto
             else:
-                base_dados = df_plot[df_plot['Base_Route'] == b]
-                if not base_dados.empty:
-                    lat_b = base_dados['latitude'].mean()
-                    lon_b = base_dados['longitude'].mean()
-                    
-                    # Identifica em qual município a base está ancorada primariamente
-                    mun_ancora = base_dados['join_city'].mode()[0] if not base_dados['join_city'].empty else ""
-                    bases_no_mesmo_mun = municipios_com_bases.get(mun_ancora, [b])
-                    
-                    # Tenta descobrir o índice da base dentro desse município (se houver várias na mesma cidade)
-                    idx_na_cidade = list(bases_no_mesmo_mun).index(b) if b in bases_no_mesmo_mun else 0
-                    
-                    # 1. Ângulo Radial Local (Define a COR BASE - Matiz/Hue)
-                    angulo = np.arctan2(lat_b - centro_lat, lon_b - centro_lon)
-                    hue = (angulo + np.pi) / (2 * np.pi)
-                    
-                    # ESPALHAMENTO MÁGICO: Se houver várias bases muito próximas (ex: RJ), o Golden Ratio empurra as cores pro lado
-                    # Adicionamos também o hash da base para garantir que, mesmo em cidades próximas, a cor salte no disco cromático
-                    hash_mun = int(hashlib.md5(mun_ancora.encode()).hexdigest(), 16)
-                    hue = (hue + (idx_na_cidade * golden_ratio_conjugate) + (hash_mun * 0.13)) % 1.0
-                    
-                    # 2. Distância Local (Define a Luminosidade/Lightness)
-                    distancia = np.sqrt((lat_b - centro_lat)**2 + (lon_b - centro_lon)**2)
-                    # Mantém a luminosidade segura entre 35% e 75% para não virar branco nem preto
-                    lightness = 0.35 + (0.4 * (distancia % 1.0))
-                    
-                    # 3. Hash estático (Define a Vibração/Saturation)
-                    hash_val = int(hashlib.md5(b.encode()).hexdigest(), 16)
-                    saturation = 0.6 + (0.4 * ((hash_val % 100) / 100.0)) 
-                    
-                    r, g, blue = [int(x * 255) for x in colorsys.hls_to_rgb(hue, lightness, saturation)]
-                    st.session_state.cores_transp[b] = f'#{r:02x}{g:02x}{blue:02x}'
-                else:
-                    st.session_state.cores_transp[b] = '#333333'
+                # 1. Matiz (Hue): O golden ratio garante que cores consecutivas fiquem em lados opostos da roda de cores
+                hue_atual = (hue_atual + golden_ratio_conjugate) % 1.0
+                
+                # 2. Luminosidade (Lightness): Intercala entre claro (65%), médio (50%) e escuro (35%)
+                # Isso quebra a similaridade visual caso duas matizes acabem ficando próximas
+                lightness_levels = [0.35, 0.50, 0.65]
+                lightness = lightness_levels[idx % 3]
+                
+                # 3. Saturação (Saturation): Intercala entre muito vibrante (95%) e suavemente opaco (75%)
+                saturation_levels = [0.95, 0.75]
+                saturation = saturation_levels[idx % 2]
+                
+                r, g, blue = [int(x * 255) for x in colorsys.hls_to_rgb(hue_atual, lightness, saturation)]
+                st.session_state.cores_transp[b] = f'#{r:02x}{g:02x}{blue:02x}'
             
     with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
         bases_para_pintar = st.multiselect("🔍 Busque e selecione a(s) Base(s):", bases_ativas_br, help="Digite para buscar e selecione as bases.")
@@ -877,7 +855,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 st.session_state.cores_transp[b] = st.color_picker(f"Cor para {b}", st.session_state.cores_transp[b], key=f"cor_br_{b}")
         else:
             st.info("Selecione uma base acima para editar sua cor.")
-    
+
     # -----------------------------------------------
     # ABAS DA VISÃO NACIONAL
     # -----------------------------------------------

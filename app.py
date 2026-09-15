@@ -815,36 +815,37 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     
     if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
         
-    bases_ativas_br = sorted(df_br['Base_Route'].dropna().unique())
+    bases_ativas_br = sorted(df_plot['Base_Route'].dropna().unique())
     
-    # Usa o Baricentro MÓVEL (Se o usuário filtra por Estado, ele centraliza a geometria no Estado)
+    # Usa o Baricentro MÓVEL, atualizando o centroide apenas para a região visível atual
     centro_lat = df_plot['latitude'].mean() if not df_plot.empty else -15.0
     centro_lon = df_plot['longitude'].mean() if not df_plot.empty else -50.0
+
+    # Força a recalcular as cores caso o usuário filtre regiões diferentes para sempre ter contraste máximo
+    st.session_state.cores_transp = {} 
 
     for b in bases_ativas_br:
         if b not in st.session_state.cores_transp:
             if is_correios_global(b):
                 st.session_state.cores_transp[b] = '#000000' # Correios sempre preto
             else:
-                base_dados = df_br[df_br['Base_Route'] == b]
+                base_dados = df_plot[df_plot['Base_Route'] == b]
                 if not base_dados.empty:
                     lat_b = base_dados['latitude'].mean()
                     lon_b = base_dados['longitude'].mean()
                     
-                    # 1. Ângulo Radial (0 a 360 graus) - Define a COR (Matiz/Hue)
+                    # 1. Ângulo Radial Local
                     angulo = np.arctan2(lat_b - centro_lat, lon_b - centro_lon)
                     hue = (angulo + np.pi) / (2 * np.pi)
                     
-                    # 2. Distância ao Centro - Define o TOM (Luminosidade/Lightness)
-                    # Força bases vizinhas a terem tons diferentes se estiverem no mesmo ângulo
+                    # 2. Distância Local
                     distancia = np.sqrt((lat_b - centro_lat)**2 + (lon_b - centro_lon)**2)
-                    lightness = 0.4 + (0.4 * (distancia % 1.0)) # Varia a luz entre 40% e 80%
+                    lightness = 0.4 + (0.4 * (distancia % 1.0)) 
                     
-                    # 3. Hash estático - Define a SATURAÇÃO (Vibração)
+                    # 3. Hash estático
                     hash_val = int(hashlib.md5(b.encode()).hexdigest(), 16)
-                    saturation = 0.7 + (0.3 * ((hash_val % 100) / 100.0)) # Varia entre 70% e 100% vibrante
+                    saturation = 0.7 + (0.3 * ((hash_val % 100) / 100.0)) 
                     
-                    # Converte de volta para HEX
                     r, g, blue = [int(x * 255) for x in colorsys.hls_to_rgb(hue, lightness, saturation)]
                     st.session_state.cores_transp[b] = f'#{r:02x}{g:02x}{blue:02x}'
                 else:
@@ -942,7 +943,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         # 2. Legenda de Cores
         bases_no_mapa = df_plot['Base_Route'].unique()
         df_vol_bases = df_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
-        top_bases = df_vol_bases.head(20).index.tolist()
+        top_bases = df_vol_bases.head(30).index.tolist()
         
         st.markdown("<br>**Legenda de Cores (Principais Bases no Mapa):**", unsafe_allow_html=True)
         leg_html = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px; margin-bottom: 20px;'>"
@@ -950,8 +951,8 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             cor_b = st.session_state.cores_transp.get(b, '#333333')
             leg_html += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor_b}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{b}</span></div>"
         
-        if len(bases_no_mapa) > 20:
-            leg_html += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa) - 20} bases menores na região.</span></div>"
+        if len(bases_no_mapa) > 30:
+            leg_html += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa) - 30} bases menores na região.</span></div>"
             st.info("ℹ️ Para ter um detalhamento exato das cores de todas as bases, aplique os filtros acima para analisar uma região menor.")
             
         leg_html += "</div>"
@@ -964,14 +965,6 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         st.dataframe(df_table, use_container_width=True, hide_index=True)
 
         st.markdown("---")
-        st.markdown("### 🗂️ Visão Tabular Detalhada")
-        cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
-        df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
-        if 'pct_dia' in df_completa.columns:
-            df_completa['pct_dia'] = df_completa['pct_dia'].round(0).astype(int)
-            df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
-        st.dataframe(df_completa, use_container_width=True, hide_index=True)
-
         st.markdown("### 🗂️ Visão Tabular Detalhada")
         cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
@@ -1123,7 +1116,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         # 2. Legenda de Cores
         bases_no_mapa_sim = df_sim_plot['Base_Route'].unique()
         df_vol_bases_sim = df_sim_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
-        top_bases_sim = df_vol_bases_sim.head(20).index.tolist()
+        top_bases_sim = df_vol_bases_sim.head(30).index.tolist()
         
         st.markdown("<br>**Legenda de Cores (Principais Bases no Mapa):**", unsafe_allow_html=True)
         leg_html_sim = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px; margin-bottom: 20px;'>"
@@ -1131,8 +1124,8 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             cor_b = st.session_state.cores_transp.get(b, '#333333')
             leg_html_sim += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor_b}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{b}</span></div>"
         
-        if len(bases_no_mapa_sim) > 20:
-            leg_html_sim += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa_sim) - 20} bases menores na região.</span></div>"
+        if len(bases_no_mapa_sim) > 30:
+            leg_html_sim += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa_sim) - 30} bases menores na região.</span></div>"
             st.info("ℹ️ Para ter um detalhamento exato das cores de todas as bases, aplique os filtros acima para analisar uma região menor.")
             
         leg_html_sim += "</div>"

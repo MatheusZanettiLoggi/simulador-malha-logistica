@@ -370,11 +370,15 @@ def load_dados(excel_file, zip_file, modo):
     if 'Package Register Routing Code De Entrega' in df.columns: col_routing = 'Package Register Routing Code De Entrega'
     else: col_routing = 'Package Planned DC Routing Code'
 
-    # Busca segura da coluna de pacotes, garantindo que não puxe nomes de empresas por engano
+    # Busca segura da coluna de pacotes, blindada contra colisão de nomes
     if 'Package Register # Pacotes' in df.columns: 
         col_vol = 'Package Register # Pacotes'
+    elif 'Package # Packages' in df.columns:
+        col_vol = 'Package # Packages'
     else: 
-        col_vol = next((c for c in df.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and 'NAME' not in str(c).upper() and 'COMPANY' not in str(c).upper()), 'Package # Packages')    
+        colunas_proibidas = [col_bairro, col_cidade, col_company, col_routing, col_cep, col_data]
+        col_vol = next((c for c in df.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and c not in colunas_proibidas and 'NAME' not in str(c).upper()), '# Pacotes')    
+    
     qtd_dias = 30
     if col_data in df.columns:
         try:
@@ -490,8 +494,8 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     col_route2 = next((c for c in df_volume.columns if 'ROUTING' in str(c).upper() or 'ROTA' in str(c).upper()), 'Routing Code')
     col_city2 = next((c for c in df_volume.columns if 'CITY' in str(c).upper() or 'CIDADE' in str(c).upper()), 'City')
     
-    # O motor de busca agora é obrigado a ignorar colunas de nome para não confundir "Package Name" com Volume
-    col_pacotes = next((c for c in df_volume.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and 'NAME' not in str(c).upper() and 'COMPANY' not in str(c).upper() and 'LMC' not in str(c).upper()), '# Pacotes')
+    # Blindagem anti-colisão: proíbe que a coluna de pacotes seja a mesma que a de cidade ou rota
+    col_pacotes = next((c for c in df_volume.columns if ('PACOTE' in str(c).upper() or 'PACKAGE' in str(c).upper()) and c not in [col_route2, col_city2] and 'NAME' not in str(c).upper() and 'COMPANY' not in str(c).upper()), '# Pacotes')
     
     col_dias = next((c for c in df_volume.columns if 'DIAS' in str(c).upper() or 'DAYS' in str(c).upper()), '# Dias')
 

@@ -921,12 +921,29 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 
         FastNationalMarkers(json.dumps(markers_data_atual)).add_to(m_br)
 
-        # Injeta a legenda inteligente
+        df_table = df_plot.groupby('Base_Route').agg(
+            Volume_Dia=('pct_dia', 'sum'),
+            Municipios_Atendidos=('join_city', 'nunique')
+        ).reset_index().sort_values('Volume_Dia', ascending=False)
+        
+        df_table.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
+        df_table['Volume_Dia'] = df_table['Volume_Dia'].round(0)
+        
+        # Renderiza Mapa e Tabela Primeiro
+        col_mapa, col_tabela = st.columns([3, 1])
+        with col_mapa:
+            st.markdown("**Localização Proporcional ao Volume**")
+            folium_static(m_br, width=1000, height=550)
+        with col_tabela:
+            st.markdown("**Resumo Operacional (Atual)**")
+            st.dataframe(df_table, use_container_width=True, hide_index=True)
+
+        # Injeta a legenda inteligente ABAIXO do Mapa
         bases_no_mapa = df_plot['Base_Route'].unique()
         df_vol_bases = df_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
         top_bases = df_vol_bases.head(20).index.tolist()
         
-        st.markdown("<br>**Legenda de Cores (Principais Bases):**", unsafe_allow_html=True)
+        st.markdown("<br>**Legenda de Cores (Principais Bases no Mapa):**", unsafe_allow_html=True)
         leg_html = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px; margin-bottom: 20px;'>"
         for b in top_bases:
             cor_b = st.session_state.cores_transp.get(b, '#333333')
@@ -939,21 +956,14 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         leg_html += "</div>"
         st.markdown(leg_html, unsafe_allow_html=True)
 
-        df_table = df_plot.groupby('Base_Route').agg(
-            Volume_Dia=('pct_dia', 'sum'),
-            Municipios_Atendidos=('join_city', 'nunique')
-        ).reset_index().sort_values('Volume_Dia', ascending=False)
-        
-        df_table.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
-        df_table['Volume_Dia'] = df_table['Volume_Dia'].round(0)
-        
-        col_mapa, col_tabela = st.columns([3, 1])
-        with col_mapa:
-            st.markdown("**Localização Proporcional ao Volume**")
-            folium_static(m_br, width=1000, height=550)
-        with col_tabela:
-            st.markdown("**Resumo Operacional (Atual)**")
-            st.dataframe(df_table, use_container_width=True, hide_index=True)
+        st.markdown("---")
+        st.markdown("### 🗂️ Visão Tabular Detalhada")
+        cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
+        df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
+        if 'pct_dia' in df_completa.columns:
+            df_completa['pct_dia'] = df_completa['pct_dia'].round(0).astype(int)
+            df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
+        st.dataframe(df_completa, use_container_width=True, hide_index=True)
 
         st.markdown("### 🗂️ Visão Tabular Detalhada")
         cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']

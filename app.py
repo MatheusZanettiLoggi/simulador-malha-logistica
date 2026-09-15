@@ -929,16 +929,11 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         df_table.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
         df_table['Volume_Dia'] = df_table['Volume_Dia'].round(0)
         
-        # Renderiza Mapa e Tabela Primeiro
-        col_mapa, col_tabela = st.columns([3, 1])
-        with col_mapa:
-            st.markdown("**Localização Proporcional ao Volume**")
-            folium_static(m_br, width=1000, height=550)
-        with col_tabela:
-            st.markdown("**Resumo Operacional (Atual)**")
-            st.dataframe(df_table, use_container_width=True, hide_index=True)
+        # 1. Mapa Ocupando a Largura Total
+        st.markdown("**Localização Proporcional ao Volume**")
+        folium_static(m_br, width=1200, height=600)
 
-        # Injeta a legenda inteligente ABAIXO do Mapa
+        # 2. Legenda de Cores
         bases_no_mapa = df_plot['Base_Route'].unique()
         df_vol_bases = df_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
         top_bases = df_vol_bases.head(20).index.tolist()
@@ -955,6 +950,12 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             
         leg_html += "</div>"
         st.markdown(leg_html, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # 3. Tabela de Resumo Abaixo
+        st.markdown("### 📊 Resumo Operacional (Atual)")
+        st.dataframe(df_table, use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.markdown("### 🗂️ Visão Tabular Detalhada")
@@ -1109,13 +1110,33 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         df_table_sim.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
         df_table_sim['Volume_Dia'] = df_table_sim['Volume_Dia'].round(0)
         
-        col_mapa2, col_tabela2 = st.columns([3, 1])
-        with col_mapa2:
-            st.markdown("**Localização Proporcional ao Volume (Simulado)**")
-            folium_static(m_sim_br, width=1000, height=550)
-        with col_tabela2:
-            st.markdown("**Resumo Operacional (Simulado)**")
-            st.dataframe(df_table_sim, use_container_width=True, hide_index=True)
+        # 1. Mapa Ocupando a Largura Total
+        st.markdown("**Localização Proporcional ao Volume (Simulado)**")
+        folium_static(m_sim_br, width=1200, height=600)
+
+        # 2. Legenda de Cores
+        bases_no_mapa_sim = df_sim_plot['Base_Route'].unique()
+        df_vol_bases_sim = df_sim_plot.groupby('Base_Route')['pct_dia'].sum().sort_values(ascending=False)
+        top_bases_sim = df_vol_bases_sim.head(20).index.tolist()
+        
+        st.markdown("<br>**Legenda de Cores (Principais Bases no Mapa):**", unsafe_allow_html=True)
+        leg_html_sim = "<div style='display: flex; flex-wrap: wrap; gap: 15px; margin-top: 5px; margin-bottom: 20px;'>"
+        for b in top_bases_sim:
+            cor_b = st.session_state.cores_transp.get(b, '#333333')
+            leg_html_sim += f"<div style='display: flex; align-items: center;'><div style='width: 16px; height: 16px; background-color: {cor_b}; border-radius: 4px; border: 1px solid #777; margin-right: 8px;'></div><span style='font-size: 14px; color: inherit;'>{b}</span></div>"
+        
+        if len(bases_no_mapa_sim) > 20:
+            leg_html_sim += f"<div style='display: flex; align-items: center;'><span style='font-size: 14px; font-weight: bold; color: #888;'>... + {len(bases_no_mapa_sim) - 20} bases menores na região.</span></div>"
+            st.info("ℹ️ Para ter um detalhamento exato das cores de todas as bases, aplique os filtros acima para analisar uma região menor.")
+            
+        leg_html_sim += "</div>"
+        st.markdown(leg_html_sim, unsafe_allow_html=True)
+
+        st.markdown("---")
+
+        # 3. Tabela de Resumo Abaixo
+        st.markdown("### 📊 Resumo Operacional (Simulado)")
+        st.dataframe(df_table_sim, use_container_width=True, hide_index=True)
             
         st.markdown("---")
         st.markdown("**🔄 Relação de Municípios Alterados (De ➔ Para)**")

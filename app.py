@@ -809,44 +809,36 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot['ID_Row'] = df_plot.index
     
     # -----------------------------------------------
-    # Cores Personalizáveis & Lógica de Contraste (Hash Spacing Uniforme)
+    # Cores Personalizáveis & Lógica de Contraste Fixo (Hash Spacing Uniforme)
     # -----------------------------------------------
     import colorsys
     
-    if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
+    if 'cores_transp' not in st.session_state: 
+        st.session_state.cores_transp = {}
         
-    bases_ativas_br = sorted(df_plot['Base_Route'].dropna().unique())
-    total_bases = len(bases_ativas_br)
+    # Pega TODAS as bases do dataset original para garantir que as cores NUNCA mudem ao filtrar
+    bases_globais_br = sorted(df_br['Base_Route'].dropna().unique())
+    total_bases_globais = len(bases_globais_br)
 
-    # Força a recalcular as cores caso o usuário filtre regiões diferentes para sempre ter contraste máximo
-    st.session_state.cores_transp = {} 
-
-    # Se houver apenas 1 base, evita divisão por zero
-    passo_hue = 1.0 / total_bases if total_bases > 0 else 1.0
-    
-    # Golden ratio estrito para espalhar as cores na sequência
+    passo_hue = 1.0 / total_bases_globais if total_bases_globais > 0 else 1.0
     golden_ratio_conjugate = 0.618033988749895
-    hue_atual = random.random() # Ponto de partida aleatório para variar as paletas a cada filtro
+    hue_atual = 0.5 # Ponto de partida fixo para manter as cores sempre idênticas nas sessões
 
-    for idx, b in enumerate(bases_ativas_br):
+    for idx, b in enumerate(bases_globais_br):
         if b not in st.session_state.cores_transp:
             if is_correios_global(b):
                 st.session_state.cores_transp[b] = '#000000' # Correios sempre preto
             else:
-                # 1. Matiz (Hue): O golden ratio garante que cores consecutivas fiquem em lados opostos da roda de cores
                 hue_atual = (hue_atual + golden_ratio_conjugate) % 1.0
-                
-                # 2. Luminosidade (Lightness): Intercala entre claro (65%), médio (50%) e escuro (35%)
-                # Isso quebra a similaridade visual caso duas matizes acabem ficando próximas
                 lightness_levels = [0.35, 0.50, 0.65]
                 lightness = lightness_levels[idx % 3]
-                
-                # 3. Saturação (Saturation): Intercala entre muito vibrante (95%) e suavemente opaco (75%)
                 saturation_levels = [0.95, 0.75]
                 saturation = saturation_levels[idx % 2]
-                
                 r, g, blue = [int(x * 255) for x in colorsys.hls_to_rgb(hue_atual, lightness, saturation)]
                 st.session_state.cores_transp[b] = f'#{r:02x}{g:02x}{blue:02x}'
+    
+    # Mantém apenas as bases visíveis para o seletor lateral
+    bases_ativas_br = sorted(df_plot['Base_Route'].dropna().unique())
             
     with st.sidebar.expander("🎨 Personalizar Cores das Bases"):
         bases_para_pintar = st.multiselect("🔍 Busque e selecione a(s) Base(s):", bases_ativas_br, help="Digite para buscar e selecione as bases.")
@@ -859,7 +851,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     # -----------------------------------------------
     # ABAS DA VISÃO NACIONAL
     # -----------------------------------------------
-    aba_nac1, aba_nac2, aba_nac3 = st.tabs(["📍 Cenário Atual", "🔄 Cenário Simulado", "🚚 Expansão de Malha (Redespacho)"])
+    aba_nac1, aba_nac2, aba_nac3, aba_nac4 = st.tabs(["📍 Cenário Atual", "🔄 Cenário Simulado", "🚚 Expansão de Malha (Redespacho)", "🗃️ Ranges de CEP (Oficial)"])
 
     tiles_esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr_esri = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
@@ -1289,6 +1281,80 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 )
             else:
                 st.info("Não há cidades exclusivas em redespacho ou bases próprias suficientes para cruzar dados de expansão neste filtro.")
+
+    with aba_nac4:
+        st.markdown("### 🗃️ Ranges de CEP por Base (Visão Nacional)")
+        st.write("Mapeamento automático dos ranges de CEP oficiais para os municípios atualmente filtrados nas simulações.")
+        
+        with st.spinner("Extraindo ranges de CEPs da malha oficial (Correios)..."):
+            mapa_ceps_min = {}
+            mapa_ceps_max = {}
+            estados_presentes = df_plot[col_state1].dropna().unique()
+            faltou_base_nac = False
+            
+            for uf_tabela in estados_presentes:
+                caminhos_uf = [f"Base_CEPs_Estados/CEPs_{uf_tabela}.csv.gz", f"CEPs_{uf_tabela}.csv.gz"]
+                if any(os.path.exists(c) for c in caminhos_uf):
+                    df_ceps_uf = carregar_ceps_estado(uf_tabela)
+                    if not df_ceps_uf.empty and 'municipio' in df_ceps_uf.columns and 'cep' in df_ceps_uf.columns:
+                        df_ceps_uf['mun_limpo'] = df_ceps_uf['municipio'].apply(limpa_texto)
+                        agrupado = df_ceps_uf.groupby('mun_limpo')['cep'].agg(['min', 'max'])
+                        for mun, row_cep in agrupado.iterrows():
+                            chave = f"{mun}_{uf_tabela}"
+                            mapa_ceps_min[chave] = formatar_cep(row_cep['min'])
+                            mapa_ceps_max[chave] = formatar_cep(fechar_buraco_cep(row_cep['max']))
+                else:
+                    faltou_base_nac = True
+
+            if faltou_base_nac:
+                st.info("ℹ️ Alguns ranges de CEP podem não ser encontrados pois as bases do e-DNE de certos estados não estão na pasta 'Base_CEPs_Estados'.")
+
+            def construir_tabela_ceps(df_base):
+                if df_base.empty: return pd.DataFrame()
+                df_out = df_base[[col_state1, col_city1, col_region, 'Base_Route']].copy()
+                df_out.columns = ['Estado', 'Município', 'Região de Preço', 'Base LMC']
+                chaves = df_base['join_city'] + "_" + df_base[col_state1]
+                df_out.insert(3, 'CEP Inicial', chaves.map(mapa_ceps_min).fillna('Não encontrado'))
+                df_out.insert(4, 'CEP Final', chaves.map(mapa_ceps_max).fillna('Não encontrado'))
+                return df_out.sort_values(['Estado', 'Município']).drop_duplicates()
+
+            df_ceps_atual = construir_tabela_ceps(df_plot)
+            df_ceps_simulado = construir_tabela_ceps(df_sim_plot)
+            
+            # Identifica as alterações e as bases cruzadas
+            if not df_ceps_atual.empty and not df_ceps_simulado.empty:
+                df_comp_ceps = pd.merge(df_ceps_atual, df_ceps_simulado, on=['Estado', 'Município', 'Região de Preço', 'CEP Inicial', 'CEP Final'], suffixes=('_Atual', '_Simulado'))
+                df_ceps_alterados = df_comp_ceps[df_comp_ceps['Base LMC_Atual'] != df_comp_ceps['Base LMC_Simulado']].copy()
+            else:
+                df_ceps_alterados = pd.DataFrame()
+            
+            st.markdown("#### 1. Cenário Atual")
+            st.dataframe(df_ceps_atual, use_container_width=True, hide_index=True)
+            
+            st.markdown("#### 2. Cenário Simulado")
+            st.dataframe(df_ceps_simulado, use_container_width=True, hide_index=True)
+            
+            st.markdown("#### 🔄 Municípios Alterados")
+            if not df_ceps_alterados.empty:
+                st.dataframe(df_ceps_alterados, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum município foi alterado em relação ao Cenário Atual.")
+            
+            # Botão de geração do Excel Formatado
+            dict_excel_nac = {
+                'CEPs_Cenario_Atual': df_ceps_atual,
+                'CEPs_Cenario_Simulado': df_ceps_simulado,
+                'CEPs_Alterados': df_ceps_alterados
+            }
+            
+            st.markdown("---")
+            st.download_button(
+                label="📥 Baixar Relatório de CEPs Nacionais (Excel)",
+                data=exportar_excel_formatado(dict_excel_nac),
+                file_name="Ranges_CEP_Nacional.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
                 
     st.stop()
 

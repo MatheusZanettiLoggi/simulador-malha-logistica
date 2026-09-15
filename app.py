@@ -809,16 +809,15 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     df_plot['ID_Row'] = df_plot.index
     
     # -----------------------------------------------
-    # Cores Personalizáveis & Lógica de Contraste Geográfico
+    # Cores Personalizáveis & Lógica de Contraste Geográfico Dinâmico (HSL Esférico)
     # -----------------------------------------------
+    import colorsys
+    
     if 'cores_transp' not in st.session_state: st.session_state.cores_transp = {}
         
     bases_ativas_br = sorted(df_br['Base_Route'].dropna().unique())
     
-    # HSL Colors fixas, bem espaçadas para contraste (Evita a vizinhança monocromática)
-    paleta_contraste = ['#e6194B', '#3cb44b', '#ffe119', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#f032e6', '#bfef45', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#fffac8', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#a9a9a9']
-    
-    # Gera um centro de massa (Baricentro logístico) do Brasil para criar os vetores de cor
+    # Usa o Baricentro MÓVEL (Se o usuário filtra por Estado, ele centraliza a geometria no Estado)
     centro_lat = df_plot['latitude'].mean() if not df_plot.empty else -15.0
     centro_lon = df_plot['longitude'].mean() if not df_plot.empty else -50.0
 
@@ -827,20 +826,27 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             if is_correios_global(b):
                 st.session_state.cores_transp[b] = '#000000' # Correios sempre preto
             else:
-                # Lógica: Pega a lat/lon média das entregas dessa base específica
                 base_dados = df_br[df_br['Base_Route'] == b]
                 if not base_dados.empty:
                     lat_b = base_dados['latitude'].mean()
                     lon_b = base_dados['longitude'].mean()
-                    # Calcula o ângulo HSL baseado na posição para forçar cores diferentes
+                    
+                    # 1. Ângulo Radial (0 a 360 graus) - Define a COR (Matiz/Hue)
                     angulo = np.arctan2(lat_b - centro_lat, lon_b - centro_lon)
-                    # Usa o ângulo para pescar uma cor diferente na paleta
-                    idx_calc = int((angulo + np.pi) / (2 * np.pi) * len(paleta_contraste))
+                    hue = (angulo + np.pi) / (2 * np.pi)
                     
-                    # Adiciona um hash secundário para diferenciar bases na mesma cidade
-                    hash_b = int(hashlib.md5(b.encode()).hexdigest(), 16) % len(paleta_contraste)
+                    # 2. Distância ao Centro - Define o TOM (Luminosidade/Lightness)
+                    # Força bases vizinhas a terem tons diferentes se estiverem no mesmo ângulo
+                    distancia = np.sqrt((lat_b - centro_lat)**2 + (lon_b - centro_lon)**2)
+                    lightness = 0.4 + (0.4 * (distancia % 1.0)) # Varia a luz entre 40% e 80%
                     
-                    st.session_state.cores_transp[b] = paleta_contraste[(idx_calc + hash_b) % len(paleta_contraste)]
+                    # 3. Hash estático - Define a SATURAÇÃO (Vibração)
+                    hash_val = int(hashlib.md5(b.encode()).hexdigest(), 16)
+                    saturation = 0.7 + (0.3 * ((hash_val % 100) / 100.0)) # Varia entre 70% e 100% vibrante
+                    
+                    # Converte de volta para HEX
+                    r, g, blue = [int(x * 255) for x in colorsys.hls_to_rgb(hue, lightness, saturation)]
+                    st.session_state.cores_transp[b] = f'#{r:02x}{g:02x}{blue:02x}'
                 else:
                     st.session_state.cores_transp[b] = '#333333'
             

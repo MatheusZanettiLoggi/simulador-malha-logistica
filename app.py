@@ -782,6 +782,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         
     with col_f6:
         highlight_vol = st.number_input("Destacar municípios com > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes (efeito fantasma).")
+        estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", ["Escuro (Padrão)", "Google Maps (Rótulos)", "Satélite", "Claro (CartoDB)"])
 
     st.markdown("---")
 
@@ -856,11 +857,29 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     tiles_esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr_esri = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
 
+    # -----------------------------------------------
+    # ABAS DA VISÃO NACIONAL
+    # -----------------------------------------------
+    aba_nac1, aba_nac2, aba_nac3, aba_nac4 = st.tabs(["📍 Cenário Atual", "🔄 Cenário Simulado", "🚚 Expansão de Malha (Redespacho)", "🗃️ Ranges de CEP (Oficial)"])
+
+    # Lógica Dinâmica de Estilo de Mapa
+    if estilo_mapa == "Google Maps (Rótulos)":
+        tiles_mapa = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
+        attr_mapa = 'Google Maps'
+    elif estilo_mapa == "Satélite":
+        tiles_mapa = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
+        attr_mapa = 'Google Maps Satellite'
+    elif estilo_mapa == "Claro (CartoDB)":
+        tiles_mapa = 'CartoDB positron'
+        attr_mapa = 'CartoDB'
+    else:
+        tiles_mapa = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
+        attr_mapa = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
+
     with aba_nac1:
         st.markdown("### 📍 Cenário Atual")
         cy, cx = -15.7801, -47.9292
-        m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_esri, attr=attr_esri, prefer_canvas=True)
-        Fullscreen().add_to(m_br)
+        m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_mapa, attr=attr_mapa, prefer_canvas=True)
 
         if not df_plot.empty:
             df_bounds = df_plot[(df_plot['latitude'] >= -35) & (df_plot['latitude'] <= 6) & (df_plot['longitude'] >= -75) & (df_plot['longitude'] <= -30)]
@@ -1037,7 +1056,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             'is_loggi': 'first'
         }).reset_index()
 
-        m_sim_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_esri, attr=attr_esri, prefer_canvas=True)
+        m_sim_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_mapa, attr=attr_mapa, prefer_canvas=True)
         Fullscreen().add_to(m_sim_br)
 
         if not df_sim_grouped.empty:

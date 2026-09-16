@@ -857,11 +857,6 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     tiles_esri = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
     attr_esri = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'
 
-    # -----------------------------------------------
-    # ABAS DA VISÃO NACIONAL
-    # -----------------------------------------------
-    aba_nac1, aba_nac2, aba_nac3, aba_nac4 = st.tabs(["📍 Cenário Atual", "🔄 Cenário Simulado", "🚚 Expansão de Malha (Redespacho)", "🗃️ Ranges de CEP (Oficial)"])
-
     # Lógica Dinâmica de Estilo de Mapa
     if estilo_mapa == "Google Maps (Rótulos)":
         tiles_mapa = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'

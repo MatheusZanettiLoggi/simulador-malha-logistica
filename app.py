@@ -748,40 +748,48 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     # -----------------------------------------------
     st.markdown("### 🔍 Filtros de Visualização")
     
-    col_f1, col_f2, col_f3 = st.columns(3)
-    col_f4, col_f5, col_f6 = st.columns(3)
+    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    col_f5, col_f6, col_f7, col_f8 = st.columns(4)
 
     # 1. Filtro Topo da Hierarquia: Estado
     with col_f1:
         f_estados = st.multiselect("Estado(s):", sorted(df_br[col_state1].dropna().unique()))
     
-    # Aplica na memória temporária
     df_opt = df_br[df_br[col_state1].isin(f_estados)] if f_estados else df_br
 
     # 2. Hierarquia Secundária: Região (Depende do Estado)
-    with col_f4:
+    with col_f2:
         f_regioes = st.multiselect("Região de Preço:", sorted([str(x) for x in df_opt[col_region].dropna().unique() if str(x).strip() != 'nan']))
     
     if f_regioes: df_opt = df_opt[df_opt[col_region].isin(f_regioes)]
 
-    # 3. Hierarquia Terciária: Município (Depende da Região e Estado)
-    with col_f2:
-        f_cidades = st.multiselect("Município(s):", sorted(df_opt['City_State'].dropna().unique()))
+    # 3. Hierarquia Terciária: Município INCLUIR e EXCLUIR
+    cidades_disponiveis = sorted(df_opt['City_State'].dropna().unique())
+    
+    with col_f3:
+        f_cidades = st.multiselect("Município(s) - INCLUIR:", cidades_disponiveis)
         
     if f_cidades: df_opt = df_opt[df_opt['City_State'].isin(f_cidades)]
+        
+    with col_f4:
+        f_cidades_excluir = st.multiselect("Município(s) - EXCLUIR ❌:", cidades_disponiveis, help="Remove as cidades selecionadas do mapa.")
+        
+    if f_cidades_excluir: df_opt = df_opt[~df_opt['City_State'].isin(f_cidades_excluir)]
 
     # 4. Base (Depende de todos os anteriores)
-    with col_f3:
+    with col_f5:
         f_bases = st.multiselect("Base(s) e Routing Code:", sorted(df_opt['Base_Route'].dropna().unique()))
         
     if f_bases: df_opt = df_opt[df_opt['Base_Route'].isin(f_bases)]
 
-    # 5. Serviço
-    with col_f5:
+    # 5. Serviço e Estilos
+    with col_f6:
         f_servicos = st.multiselect("Tipo de Serviço:", sorted(df_opt[col_service1].dropna().astype(str).unique()))
         
-    with col_f6:
-        highlight_vol = st.number_input("Destacar municípios com > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes (efeito fantasma).")
+    with col_f7:
+        highlight_vol = st.number_input("Destacar > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes.")
+        
+    with col_f8:
         estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", ["Escuro (Padrão)", "Google Maps (Rótulos)", "Satélite", "Claro (CartoDB)"])
 
     st.markdown("---")

@@ -971,21 +971,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 
         st.markdown("---")
 
-       # 3. Tabela de Resumo Abaixo
+        # 3. Tabela de Resumo Abaixo
         st.markdown("### 📊 Resumo Operacional (Atual)")
-        
-        # Estilização: Centraliza todas as colunas, exceto a primeira (Base LMC)
-        st.dataframe(
-            df_table.style.set_properties(
-                subset=df_table.columns[1:], 
-                **{'text-align': 'center'}
-            ).set_properties(
-                subset=[df_table.columns[0]], 
-                **{'text-align': 'left'}
-            ), 
-            use_container_width=True, 
-            hide_index=True
-        )
+        st.dataframe(df_table, use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.markdown("### 🗂️ Visão Tabular Detalhada")
@@ -994,17 +982,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         if 'pct_dia' in df_completa.columns:
             df_completa['pct_dia'] = df_completa['pct_dia'].round(0).astype(int)
             df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
-        # Estiliza mantendo as colunas de texto (Município, Base) alinhadas à esquerda e o resto ao centro
-        colunas_esquerda = [col_city1, col_lmc, col_region, col_service1]
-        colunas_esquerda = [c for c in colunas_esquerda if c in df_completa.columns]
-        colunas_centro = [c for c in df_completa.columns if c not in colunas_esquerda]
-        
-        styled_df = df_completa.style.set_properties(
-            subset=colunas_centro, **{'text-align': 'center'}
-        ).set_properties(
-            subset=colunas_esquerda, **{'text-align': 'left'}
-        )
-        st.dataframe(styled_df, use_container_width=True, hide_index=True)
+        st.dataframe(df_completa, use_container_width=True, hide_index=True)
 
     with aba_nac2:
         st.markdown("### 🔄 Cenário Simulado")
@@ -1168,17 +1146,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 
         # 3. Tabela de Resumo Abaixo
         st.markdown("### 📊 Resumo Operacional (Simulado)")
-        st.dataframe(
-            df_table_sim.style.set_properties(
-                subset=df_table_sim.columns[1:], 
-                **{'text-align': 'center'}
-            ).set_properties(
-                subset=[df_table_sim.columns[0]], 
-                **{'text-align': 'left'}
-            ), 
-            use_container_width=True, 
-            hide_index=True
-        )
+        st.dataframe(df_table_sim, use_container_width=True, hide_index=True)
             
         st.markdown("---")
         st.markdown("**🔄 Relação de Municípios Alterados (De ➔ Para)**")
@@ -1193,24 +1161,14 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             df_changed_br = df_changed_br[[col_city1 + '_Atual', col_state1 + '_Atual', col_region + '_Atual', 'Base_Route_Atual', 'Base_Route_Simulado', 'pct_dia_Atual']].copy()
             df_changed_br.columns = ['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada', 'Volume Migrado (pct/dia)']
             df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].round(0)
-            styled_changed = df_changed_br.style.set_properties(
-                subset=['Volume Migrado (pct/dia)'], **{'text-align': 'center'}
-            ).set_properties(
-                subset=['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada'], **{'text-align': 'left'}
-            )
-            st.dataframe(styled_changed, use_container_width=True, hide_index=True)
+            st.dataframe(df_changed_br, use_container_width=True, hide_index=True)
             
         st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
         if 'pct_dia' in df_completa_sim.columns:
             df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].round(0).astype(int)
             df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
-        styled_df_sim = df_completa_sim.style.set_properties(
-            subset=colunas_centro, **{'text-align': 'center'}
-        ).set_properties(
-            subset=colunas_esquerda, **{'text-align': 'left'}
-        )
-        st.dataframe(styled_df_sim, use_container_width=True, hide_index=True)
+        st.dataframe(df_completa_sim, use_container_width=True, hide_index=True)
 
     with aba_nac3:
         st.markdown("### 🚚 Municípios em Redespacho (Oportunidades de Expansão)")

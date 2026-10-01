@@ -514,10 +514,35 @@ def processar_modo_nacional(abrangencia_bytes, volume_bytes):
     if col_dias in df_volume.columns:
         df_volume[col_dias] = pd.to_numeric(df_volume[col_dias], errors='coerce').fillna(1)
 
-    # Descobre o máximo de dias globais do relatório (ex: 30 dias)
-    max_dias_global = df_volume[col_dias].max()
-    if pd.isna(max_dias_global) or max_dias_global == 0:
-        max_dias_global = 1
+    # Lógica Avançada de Período (Dias Úteis)
+    # 1. Busca coluna de data
+    col_data = next((c for c in df_volume.columns if 'DATA' in str(c).upper() or 'DATE' in str(c).upper()), None)
+    
+    if col_data and not df_volume[col_data].dropna().empty:
+        # Tenta formatar a coluna para o tipo datetime do Pandas
+        df_volume[col_data] = pd.to_datetime(df_volume[col_data], errors='coerce')
+        datas_validas = df_volume[col_data].dropna()
+        if not datas_validas.empty:
+            # Captura o menor e o maior dia dentro da extração do Looker
+            min_date = datas_validas.min().date()
+            max_date = datas_validas.max().date()
+            # Calcula quantos dias úteis (Seg a Sex) existem entre essa janela
+            # soma + 1 no max_date pois o busday_count não inclui o último dia nativamente
+            dias_uteis = np.busday_count(min_date, max_date + pd.Timedelta(days=1))
+            max_dias_global = int(dias_uteis) if dias_uteis > 0 else 1
+        else:
+            # Fallback se a data falhar: Pega o máximo da coluna de dias e converte em janela de úteis
+            max_dias_raw = df_volume[col_dias].max()
+            if pd.isna(max_dias_raw) or max_dias_raw == 0: max_dias_raw = 1
+            semanas = max_dias_raw / 7
+            max_dias_global = int(max_dias_raw - (semanas * 2))
+    else:
+        # Fallback se não existir coluna de data: Converte o número de dias brutos extraídos para úteis
+        max_dias_raw = df_volume[col_dias].max()
+        if pd.isna(max_dias_raw) or max_dias_raw == 0: max_dias_raw = 1
+        semanas = max_dias_raw / 7
+        max_dias_global = int(max_dias_raw - (semanas * 2))
+        if max_dias_global < 1: max_dias_global = 1
 
     df_abrangencia['join_city'] = df_abrangencia[col_city1].apply(limpa_texto)
     df_volume['join_city'] = df_volume[col_city2].apply(limpa_texto)

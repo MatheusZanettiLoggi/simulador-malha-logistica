@@ -718,7 +718,7 @@ else:
         st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
         arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'], key="up_planilha")
         
-       st.sidebar.markdown("<br>**2. Mapas Geográficos (IBGE)**", unsafe_allow_html=True)
+        st.sidebar.markdown("<br>**2. Mapas Geográficos (IBGE)**", unsafe_allow_html=True)
         if modo_analise == "🏙️ Intra-Município (Por Bairros)":
             st.sidebar.caption("Precisamos do mapa da sua cidade para plotar as divisões locais.")
             st.sidebar.markdown("✅ **Se o município possui limites de bairros definidos por Lei:**\n[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")

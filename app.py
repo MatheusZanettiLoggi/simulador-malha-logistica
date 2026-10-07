@@ -1579,7 +1579,7 @@ if divergentes:
         opcoes_unmapped = [f"{b} ({v} pct)" for b, v in bairros_planilha_vazios.items()]
         bairro_planilha_selecionado = st.selectbox("1. Bairro da Planilha (Looker):", ["-- Selecione --"] + opcoes_unmapped)
         
-        bairros_ibge_raw = gdf_cidade[~gdf_cidade['Chave_Local'].isin(bairros_planilha)]
+        bairros_ibge_raw = gdf_cidade
         opcoes_ibge = []
         for _, row_i in bairros_ibge_raw.iterrows():
             nm_b = row_i.get('NM_BAIRRO_STR', 'Desconhecido')

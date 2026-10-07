@@ -1591,9 +1591,15 @@ if divergentes:
             bairro_planilha_sug = st.selectbox("Confirmar Bairro:", ["-- Selecione --", nome_planilha_limpo] if bairro_planilha_selecionado != "-- Selecione --" else ["-- Selecione --"])
             if st.button("Vincular", type="primary"):
                 if bairro_planilha_sug != "-- Selecione --":
+                    # Salva o nome exato e a versão em MAIÚSCULO para evitar falhas de leitura
                     st.session_state.de_para_bairros[bairro_planilha_sug] = nome_ibge_limpo
+                    st.session_state.de_para_bairros[bairro_planilha_sug.upper()] = nome_ibge_limpo
+                    
                     with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
                         json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+                    
+                    # Limpa a memória cache do motor para forçar o mapa a atualizar NA HORA!
+                    otimizar_base_global.clear()
                     st.rerun()
 
 df_cidade_sim = df_cidade_orig.copy()

@@ -338,13 +338,33 @@ def carregar_ceps_estado(uf):
 @st.cache_data
 def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df = df_raw.copy()
-    df['Bairro'] = df['Bairro'].apply(lambda x: de_para_dict.get(x, x))
+    
+    # Cria uma lista rápida só com os nomes de bairros/distritos do mapa do IBGE
+    ibge_bairros_limpos = [k.split('_', 1)[1] for k in ibge_name_map.keys() if '_' in k]
+    
+    def auto_map(bairro):
+        bairro_str = str(bairro)
+        if bairro_str in de_para_dict:
+            return de_para_dict[bairro_str]
+            
+        # Inteligência: Extrai o nome do distrito se estiver entre parênteses (ex: "Barroco (Itaipuaçu)")
+        match = re.findall(r'\(([^)]+)\)', bairro_str)
+        if match:
+            candidato = match[-1].strip()
+            candidato_limpo = limpa_texto(candidato)
+            if candidato_limpo in ibge_bairros_limpos:
+                return candidato # Ignora o bairro e retorna apenas o distrito oficial!
+        return bairro_str
+
+    df['Bairro'] = df['Bairro'].apply(auto_map)
     df['Join_Bairro'] = df['Bairro'].apply(limpa_texto)
+    
     def format_bairro(row):
-        jb = row['Join_Bairro']
-        jc = row['Join_Cidade']
-        if f"{jc}_{jb}" in ibge_name_map: return ibge_name_map[f"{jc}_{jb}"]
+        chave = row['Join_Cidade'] + "_" + row['Join_Bairro']
+        if chave in ibge_name_map: 
+            return ibge_name_map[chave]
         return str(row['Bairro']).title()
+        
     df['Bairro'] = df.apply(format_bairro, axis=1)
     df['Chave_Local'] = df['Join_Cidade'] + "_" + df['Join_Bairro']
     return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Chave_Local', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
@@ -1435,9 +1455,10 @@ elif tipo_mapa == "Subdistritos":
 else:
     lbl_local = "Bairro"
     lbl_locais = "Bairros"
+
 ibge_name_map = {}
-if 'NM_BAIRRO_STR' in gdf.columns and 'Join_Bairro' in gdf.columns:
-    ibge_name_map = dict(zip(gdf['Join_Bairro'], gdf['NM_BAIRRO_STR']))
+if 'NM_BAIRRO_STR' in gdf.columns and 'Chave_Local' in gdf.columns:
+    ibge_name_map = dict(zip(gdf['Chave_Local'], gdf['NM_BAIRRO_STR']))
 
 if 'regras_simulacao' not in st.session_state: st.session_state.regras_simulacao = []
 if 'confirmar_reiniciar' not in st.session_state: st.session_state.confirmar_reiniciar = False

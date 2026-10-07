@@ -721,8 +721,8 @@ else:
         st.sidebar.markdown("<br>**2. Mapas Geográficos (IBGE)**", unsafe_allow_html=True)
         if modo_analise == "🏙️ Intra-Município (Por Bairros)":
             st.sidebar.caption("Precisamos do mapa da sua cidade para plotar as divisões locais.")
-            st.sidebar.markdown("✅ **Se o município possui limites de bairros definidos por Lei:**\n[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
-            st.sidebar.markdown("⚠️ **Se NÃO possui (Ex: São Paulo, Brasília):**\n[👉 Baixar Malha de Distritos (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_municipais/municipio_2022/UFs/)\n*(Baixe o arquivo do seu Estado, descompacte e faça o upload apenas do arquivo ZIP de 'Distritos' ou 'Subdistritos')*.")
+            st.sidebar.markdown("✅ **Se o município possui limites de bairros:**\n[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
+            st.sidebar.markdown("⚠️ **Se NÃO possui (Ex: São Paulo, Brasília):**\n[👉 Baixar Malha de Distritos (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/distritos/shp/UF/)\n*(Neste link de Distritos, basta baixar o arquivo ZIP do seu Estado e fazer o upload direto aqui)*.")
             arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa (Bairros ou Distritos em ZIP)", type=['zip'], key="up_bairro")
         else:
             st.sidebar.caption("Para migrações de malha, precisamos do mapa de Municípios.")

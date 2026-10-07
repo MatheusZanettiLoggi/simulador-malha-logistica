@@ -336,24 +336,36 @@ def carregar_ceps_estado(uf):
     return pd.DataFrame()
 
 @st.cache_data
+@st.cache_data
 def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df = df_raw.copy()
     
     # Cria uma lista rápida só com os nomes de bairros/distritos do mapa do IBGE
     ibge_bairros_limpos = [k.split('_', 1)[1] for k in ibge_name_map.keys() if '_' in k]
     
+    # BLINDAGEM: Cria um dicionário à prova de espaços invisíveis e letras maiúsculas/minúsculas
+    de_para_blindado = {str(k).strip().upper(): v for k, v in de_para_dict.items()}
+    
     def auto_map(bairro):
-        bairro_str = str(bairro)
+        bairro_str = str(bairro).strip() # Remove espaços inúteis do final do nome
+        bairro_upper = bairro_str.upper()
+        
+        # 1. Tenta buscar no dicionário blindado (Resolve o problema do Caxito e Centro)
+        if bairro_upper in de_para_blindado:
+            return de_para_blindado[bairro_upper]
+            
+        # 2. Retrocompatibilidade: Tenta buscar exatamente como está
         if bairro_str in de_para_dict:
             return de_para_dict[bairro_str]
             
-        # Inteligência: Extrai o nome do distrito se estiver entre parênteses (ex: "Barroco (Itaipuaçu)")
+        # 3. Inteligência: Extrai o nome do distrito se estiver entre parênteses
         match = re.findall(r'\(([^)]+)\)', bairro_str)
         if match:
             candidato = match[-1].strip()
             candidato_limpo = limpa_texto(candidato)
             if candidato_limpo in ibge_bairros_limpos:
                 return candidato # Ignora o bairro e retorna apenas o distrito oficial!
+                
         return bairro_str
 
     df['Bairro'] = df['Bairro'].apply(auto_map)
@@ -368,7 +380,6 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
     df['Bairro'] = df.apply(format_bairro, axis=1)
     df['Chave_Local'] = df['Join_Cidade'] + "_" + df['Join_Bairro']
     return df.groupby(['Cidade', 'Bairro', 'Join_Cidade', 'Join_Bairro', 'Chave_Local', 'Cabeca_CEP', COLUNA_CEP, 'Transportadora'])['Volume'].sum().reset_index()
-
 @st.cache_data
 @st.cache_data
 @st.cache_data

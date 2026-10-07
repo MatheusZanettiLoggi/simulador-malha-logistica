@@ -1577,7 +1577,9 @@ if divergentes:
         
         bairros_planilha_vazios = df_div.groupby('Bairro')['Volume'].sum().sort_values(ascending=False)
         opcoes_unmapped = [f"{b} ({v} pct)" for b, v in bairros_planilha_vazios.items()]
-        bairro_planilha_selecionado = st.selectbox("1. Bairro da Planilha (Looker):", ["-- Selecione --"] + opcoes_unmapped)
+        
+        # 1. Trocamos para multiselect (permite escolher vários ou todos de uma vez)
+        bairros_planilha_selecionados = st.multiselect("1. Bairro(s) da Planilha (Looker):", opcoes_unmapped)
         
         bairros_ibge_raw = gdf_cidade
         opcoes_ibge = []
@@ -1592,26 +1594,25 @@ if divergentes:
         opcoes_ibge = sorted(list(set(opcoes_ibge)))
         
         bairro_ibge_selecionado = st.selectbox("2. Local no Mapa (IBGE):", ["-- Nenhum --"] + opcoes_ibge)
-        if bairro_ibge_selecionado != "-- Nenhum --":
+        
+        # 2. Simplificamos a interface e iteramos sobre a lista para salvar todos de uma vez
+        if bairro_ibge_selecionado != "-- Nenhum --" and bairros_planilha_selecionados:
             nome_ibge_limpo = re.sub(r'\s*\([^)]*\)$', '', bairro_ibge_selecionado).strip()
-            if bairro_planilha_selecionado != "-- Selecione --":
-                nome_planilha_limpo = bairro_planilha_selecionado.rsplit(" (", 1)[0]
-                sugestoes = difflib.get_close_matches(nome_ibge_limpo, [nome_planilha_limpo], n=5, cutoff=0.3)
-            else:
-                sugestoes = []
-            bairro_planilha_sug = st.selectbox("Confirmar Bairro:", ["-- Selecione --", nome_planilha_limpo] if bairro_planilha_selecionado != "-- Selecione --" else ["-- Selecione --"])
-            if st.button("Vincular", type="primary"):
-                if bairro_planilha_sug != "-- Selecione --":
-                    # Salva o nome exato e a versão em MAIÚSCULO para evitar falhas de leitura
-                    st.session_state.de_para_bairros[bairro_planilha_sug] = nome_ibge_limpo
-                    st.session_state.de_para_bairros[bairro_planilha_sug.upper()] = nome_ibge_limpo
+            
+            # O botão agora avisa quantos bairros estão sendo vinculados ao mesmo tempo
+            if st.button(f"Vincular {len(bairros_planilha_selecionados)} bairro(s)", type="primary"):
+                
+                for bairro_str in bairros_planilha_selecionados:
+                    nome_planilha_limpo = bairro_str.rsplit(" (", 1)[0]
                     
-                    with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
-                        json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+                    st.session_state.de_para_bairros[nome_planilha_limpo] = nome_ibge_limpo
+                    st.session_state.de_para_bairros[nome_planilha_limpo.upper()] = nome_ibge_limpo
                     
-                    # Limpa a memória cache do motor para forçar o mapa a atualizar NA HORA!
-                    otimizar_base_global.clear()
-                    st.rerun()
+                with open(ARQUIVO_DE_PARA, 'w', encoding='utf-8') as f:
+                    json.dump(st.session_state.de_para_bairros, f, ensure_ascii=False, indent=4)
+                    
+                otimizar_base_global.clear()
+                st.rerun()
 
 df_cidade_sim = df_cidade_orig.copy()
 

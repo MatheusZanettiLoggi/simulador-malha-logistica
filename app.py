@@ -351,6 +351,7 @@ def otimizar_base_global(df_raw, de_para_dict, ibge_name_map):
 
 @st.cache_data
 @st.cache_data
+@st.cache_data
 def load_dados(excel_file, zip_file, modo):
     df = pd.read_excel(excel_file)
     
@@ -370,7 +371,6 @@ def load_dados(excel_file, zip_file, modo):
     if 'Package Register Routing Code De Entrega' in df.columns: col_routing = 'Package Register Routing Code De Entrega'
     else: col_routing = 'Package Planned DC Routing Code'
 
-    # Busca segura da coluna de pacotes, blindada contra colisão de nomes
     if 'Package Register # Pacotes' in df.columns: 
         col_vol = 'Package Register # Pacotes'
     elif 'Package # Packages' in df.columns:
@@ -403,6 +403,17 @@ def load_dados(excel_file, zip_file, modo):
     gdf = gpd.read_file('zip://temp_mapa.zip')
     gdf['geometry'] = gdf['geometry'].simplify(tolerance=0.001, preserve_topology=True)
     
+    # Inteligência de Mapeamento: Detecta se o ZIP contém Bairros, Distritos ou Subdistritos
+    tipo_mapa = "Bairros"
+    col_bairro_shp = 'NM_BAIRRO'
+    if 'NM_BAIRRO' not in gdf.columns:
+        if 'NM_DIST' in gdf.columns:
+            tipo_mapa = "Distritos"
+            col_bairro_shp = 'NM_DIST'
+        elif 'NM_SUBDIST' in gdf.columns:
+            tipo_mapa = "Subdistritos"
+            col_bairro_shp = 'NM_SUBDIST'
+    
     if modo == "🏙️ Intra-Município (Por Bairros)":
         df_vol = df.groupby([col_cidade, col_bairro, col_company, col_cep])[col_vol].sum().reset_index()
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
@@ -410,9 +421,10 @@ def load_dados(excel_file, zip_file, modo):
         df_vol['Join_Bairro'] = df_vol['Bairro'].apply(limpa_texto)
         
         gdf['Join_Cidade'] = gdf['NM_MUN'].apply(limpa_texto) if 'NM_MUN' in gdf.columns else ""
-        gdf['Join_Bairro'] = gdf['NM_BAIRRO'].apply(limpa_texto) if 'NM_BAIRRO' in gdf.columns else ""
-        gdf['NM_BAIRRO_STR'] = gdf['NM_BAIRRO'] if 'NM_BAIRRO' in gdf.columns else "Desconhecido"
+        gdf['Join_Bairro'] = gdf[col_bairro_shp].apply(limpa_texto) if col_bairro_shp in gdf.columns else ""
+        gdf['NM_BAIRRO_STR'] = gdf[col_bairro_shp] if col_bairro_shp in gdf.columns else "Desconhecido"
     else:
+        tipo_mapa = "Municípios"
         df_vol = df.groupby([col_cidade, col_company, col_cep])[col_vol].sum().reset_index()
         df_vol.insert(0, 'Macro_Regiao', 'Visão Regional (Estado Completo)')
         df_vol.columns = ['Cidade', 'Bairro', 'Transportadora', COLUNA_CEP, 'Volume']
@@ -426,8 +438,7 @@ def load_dados(excel_file, zip_file, modo):
     df_vol['Cabeca_CEP'] = df_vol[COLUNA_CEP].astype(str).str.replace(r'\D', '', regex=True).str[:5]
     gdf['Chave_Local'] = gdf['Join_Cidade'] + "_" + gdf['Join_Bairro']
     
-    return df_vol, gdf, qtd_dias
-
+    return df_vol, gdf, qtd_dias, tipo_mapa
 # ---------------------------------------------------------
 # LÓGICA DO MODO ABRANGÊNCIA NACIONAL
 # ---------------------------------------------------------
@@ -707,11 +718,12 @@ else:
         st.sidebar.markdown("[👉 Acessar Relatório no Looker](https://loggi.looker.com/looks/26339)")
         arquivo_planilha = st.sidebar.file_uploader("Upload da Planilha (Excel)", type=['xlsx'], key="up_planilha")
         
-        st.sidebar.markdown("<br>**2. Mapas Geográficos (IBGE)**", unsafe_allow_html=True)
+       st.sidebar.markdown("<br>**2. Mapas Geográficos (IBGE)**", unsafe_allow_html=True)
         if modo_analise == "🏙️ Intra-Município (Por Bairros)":
-            st.sidebar.caption("Para análises locais, precisamos do mapa de Bairros.")
-            st.sidebar.markdown("[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
-            arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa de Bairros (ZIP)", type=['zip'], key="up_bairro")
+            st.sidebar.caption("Precisamos do mapa da sua cidade para plotar as divisões locais.")
+            st.sidebar.markdown("✅ **Se o município possui limites de bairros definidos por Lei:**\n[👉 Baixar Malha de Bairros (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_de_setores_censitarios__divisoes_intramunicipais/censo_2022/bairros/shp/UF)")
+            st.sidebar.markdown("⚠️ **Se NÃO possui (Ex: São Paulo, Brasília):**\n[👉 Baixar Malha de Distritos (IBGE)](https://www.ibge.gov.br/geociencias/downloads-geociencias.html?caminho=organizacao_do_territorio/malhas_territoriais/malhas_municipais/municipio_2022/UFs/)\n*(Baixe o arquivo do seu Estado, descompacte e faça o upload apenas do arquivo ZIP de 'Distritos' ou 'Subdistritos')*.")
+            arquivo_mapa = st.sidebar.file_uploader("Upload do Mapa (Bairros ou Distritos em ZIP)", type=['zip'], key="up_bairro")
         else:
             st.sidebar.caption("Para migrações de malha, precisamos do mapa de Municípios.")
             st.sidebar.markdown("[👉 Baixar Malha de Municípios (IBGE)](https://www.ibge.gov.br/geociencias/organizacao-do-territorio/malhas-territoriais/15774-malhas.html)")
@@ -1410,13 +1422,19 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 with timer("1. Carregamento de Base e Geometria"):
     excel_io = io.BytesIO(st.session_state.loaded_excel_bytes)
     map_io = io.BytesIO(st.session_state.loaded_ibge_bytes)
-    df_vol_raw, gdf, qtd_dias = load_dados(excel_io, map_io, st.session_state.modo_analise)
+    df_vol_raw, gdf, qtd_dias, tipo_mapa = load_dados(excel_io, map_io, st.session_state.modo_analise)
 
 st.session_state.qtd_dias_analise = qtd_dias
 
-lbl_local = "Bairro"
-lbl_locais = "Bairros"
-
+if tipo_mapa == "Distritos":
+    lbl_local = "Distrito"
+    lbl_locais = "Distritos"
+elif tipo_mapa == "Subdistritos":
+    lbl_local = "Subdistrito"
+    lbl_locais = "Subdistritos"
+else:
+    lbl_local = "Bairro"
+    lbl_locais = "Bairros"
 ibge_name_map = {}
 if 'NM_BAIRRO_STR' in gdf.columns and 'Join_Bairro' in gdf.columns:
     ibge_name_map = dict(zip(gdf['Join_Bairro'], gdf['NM_BAIRRO_STR']))
@@ -1478,11 +1496,16 @@ if st.session_state.cidade_selecionada_prev != cidade_selecionada:
 df_cidade_full = df_vol[df_vol['Cidade'] == cidade_selecionada].copy()
 gdf_cidade = gdf[gdf['Join_Cidade'] == limpa_texto(cidade_selecionada)]
 
+if gdf_cidade.empty and st.session_state.modo_analise == "🏙️ Intra-Município (Por Bairros)":
+    st.error(f"🚨 **Erro de Mapeamento: Polígonos Indisponíveis para {cidade_selecionada}**")
+    st.warning(f"O arquivo que você enviou não contém subdivisões mapeadas para esta cidade. Isso é comum em municípios como **São Paulo - SP** ou **Brasília - DF**, que não possuem legislação municipal de bairros e são divididos oficialmente pelo IBGE em **Distritos** ou **Subdistritos**.\n\n👉 **Solução Automática:** Vá na barra lateral, clique no link do IBGE, baixe a **Malha de Distritos** (ou Subdistritos) do Estado, e faça o upload desse novo arquivo ZIP. O sistema detectará automaticamente e trocará toda a interface de 'Bairros' para '{lbl_locais}', plotando o mapa com perfeição!")
+    st.stop()
+
 cep_amostra_global = df_cidade_full[COLUNA_CEP].iloc[0] if not df_cidade_full.empty else "00000000"
 uf_automatica = descobrir_uf_pelo_cep(cep_amostra_global)
 
 bairros_da_cidade = sorted(df_cidade_full['Bairro'].unique())
-lbl_filtro = "🏘️ 2. Filtrar Bairro(s) (Opcional):"
+lbl_filtro = f"🏘️ 2. Filtrar {lbl_locais} (Opcional):"
 
 bairros_salvos = st.session_state.get('bairros_selecionados_backup', [])
 bairros_padrao = [b for b in bairros_salvos if b in bairros_da_cidade]

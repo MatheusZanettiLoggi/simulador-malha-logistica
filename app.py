@@ -858,7 +858,6 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         highlight_vol = st.number_input("Destacar > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes.")
         
     with col_f8:
-        with col_f8:
         estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", [
             "Escuro (Padrão)", "Google Maps (Rótulos)", "Google Maps (Híbrido)", 
             "Google Maps (Relevo)", "Satélite", "Esri Street (Rodovias)", 

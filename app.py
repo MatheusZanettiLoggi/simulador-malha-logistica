@@ -1077,9 +1077,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 
         st.markdown("---")
 
-        # 3. Tabela de Resumo Abaixo
+# 3. Tabela de Resumo Abaixo
         st.markdown("### 📊 Resumo Operacional (Atual)")
-        st.dataframe(df_table, use_container_width=True, hide_index=True)
+        st.dataframe(df_table.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
 
         st.markdown("---")
         st.markdown("### 🗂️ Visão Tabular Detalhada")
@@ -1088,7 +1088,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         if 'pct_dia' in df_completa.columns:
             df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
             df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
-        st.dataframe(df_completa, use_container_width=True, hide_index=True)
+        st.dataframe(df_completa.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
 
     with aba_nac2:
         st.markdown("### 🔄 Cenário Simulado")
@@ -1257,7 +1257,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
 
         # 3. Tabela de Resumo Abaixo
         st.markdown("### 📊 Resumo Operacional (Simulado)")
-        st.dataframe(df_table_sim, use_container_width=True, hide_index=True)
+        st.dataframe(df_table_sim.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
             
         st.markdown("---")
         st.markdown("**🔄 Relação de Municípios Alterados (De ➔ Para)**")
@@ -1272,8 +1272,14 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             df_changed_br = df_changed_br[[col_city1 + '_Atual', col_state1 + '_Atual', col_region + '_Atual', 'Base_Route_Atual', 'Base_Route_Simulado', 'pct_dia_Atual']].copy()
             df_changed_br.columns = ['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada', 'Volume Migrado (pct/dia)']
             df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
-            st.dataframe(df_changed_br, use_container_width=True, hide_index=True)
+            st.dataframe(df_changed_br.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
             
+        st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
+        df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
+        if 'pct_dia' in df_completa_sim.columns:
+            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
+            df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
+        st.dataframe(df_completa_sim.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
         st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
         if 'pct_dia' in df_completa_sim.columns:

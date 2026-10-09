@@ -816,22 +816,41 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     # -----------------------------------------------
     st.markdown("### 🔍 Filtros de Visualização")
     
-    col_f1, col_f2, col_f3, col_f4 = st.columns(4)
+    # Mapeamento para Regiões do Brasil
+    uf_para_regiao = {
+        'AC': 'Norte', 'AP': 'Norte', 'AM': 'Norte', 'PA': 'Norte', 'RO': 'Norte', 'RR': 'Norte', 'TO': 'Norte',
+        'AL': 'Nordeste', 'BA': 'Nordeste', 'CE': 'Nordeste', 'MA': 'Nordeste', 'PB': 'Nordeste', 'PE': 'Nordeste', 'PI': 'Nordeste', 'RN': 'Nordeste', 'SE': 'Nordeste',
+        'DF': 'Centro-Oeste', 'GO': 'Centro-Oeste', 'MT': 'Centro-Oeste', 'MS': 'Centro-Oeste',
+        'ES': 'Sudeste', 'MG': 'Sudeste', 'RJ': 'Sudeste', 'SP': 'Sudeste',
+        'PR': 'Sul', 'RS': 'Sul', 'SC': 'Sul'
+    }
+    # Cria a nova coluna de Região baseada no Estado, limpando qualquer espaço em branco
+    df_br['Regiao_Brasil'] = df_br[col_state1].astype(str).str.upper().str.strip().map(uf_para_regiao).fillna('Desconhecida')
+
+    # Ajuste de layout: 5 colunas na primeira linha, 4 na segunda
+    col_f0, col_f1, col_f2, col_f3, col_f4 = st.columns(5)
     col_f5, col_f6, col_f7, col_f8 = st.columns(4)
 
-    # 1. Filtro Topo da Hierarquia: Estado
-    with col_f1:
-        f_estados = st.multiselect("Estado(s):", sorted(df_br[col_state1].dropna().unique()))
-    
-    df_opt = df_br[df_br[col_state1].isin(f_estados)] if f_estados else df_br
+    # 1. Filtro Topo da Hierarquia: Região do Brasil
+    with col_f0:
+        regioes_disp = sorted([r for r in df_br['Regiao_Brasil'].unique() if r != 'Desconhecida'])
+        f_regiao = st.multiselect("Região do Brasil:", regioes_disp)
+        
+    df_opt = df_br[df_br['Regiao_Brasil'].isin(f_regiao)] if f_regiao else df_br
 
-    # 2. Hierarquia Secundária: Região (Depende do Estado)
+    # 2. Hierarquia Secundária: Estado
+    with col_f1:
+        f_estados = st.multiselect("Estado(s):", sorted(df_opt[col_state1].dropna().unique()))
+    
+    if f_estados: df_opt = df_opt[df_opt[col_state1].isin(f_estados)]
+
+    # 3. Hierarquia Terciária: Região de Preço
     with col_f2:
         f_regioes = st.multiselect("Região de Preço:", sorted([str(x) for x in df_opt[col_region].dropna().unique() if str(x).strip() != 'nan']))
     
     if f_regioes: df_opt = df_opt[df_opt[col_region].isin(f_regioes)]
 
-    # 3. Hierarquia Terciária: Município INCLUIR e EXCLUIR
+    # 4. Hierarquia Quaternária: Município INCLUIR e EXCLUIR
     cidades_disponiveis = sorted(df_opt['City_State'].dropna().unique())
     
     with col_f3:

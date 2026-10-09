@@ -1280,13 +1280,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
             df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
         st.dataframe(df_completa_sim.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
-        st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
-        df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
-        if 'pct_dia' in df_completa_sim.columns:
-            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
-            df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
-        st.dataframe(df_completa_sim, use_container_width=True, hide_index=True)
-
+        
     with aba_nac3:
         st.markdown("### 🚚 Municípios em Redespacho (Oportunidades de Expansão)")
         st.write("Cidades atualmente operadas por Correios/AGF e a distância em linha reta para a malha própria mais próxima.")

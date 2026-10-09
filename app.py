@@ -859,9 +859,9 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         
     with col_f8:
         estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", [
-            "Escuro (Padrão)", "Google Maps (Rótulos)", "Google Maps (Híbrido)", 
-            "Google Maps (Relevo)", "Satélite", "Esri Street (Rodovias)", 
-            "Dark Matter (Minimalista)", "OpenStreetMap"
+            "Esri Street (Rodovias)", "Escuro (Padrão)", "Google Maps (Rótulos)", 
+            "Google Maps (Híbrido)", "Google Maps (Relevo)", "Satélite", 
+            "OpenStreetMap"
         ])
 
     st.markdown("---")
@@ -953,10 +953,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     elif estilo_mapa == "Esri Street (Rodovias)":
         tiles_mapa = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'
         attr_mapa = 'Esri Street Map'
-    elif estilo_mapa == "Dark Matter (Minimalista)":
-        tiles_mapa = 'CartoDB dark_matter'
-        attr_mapa = 'CartoDB Dark Matter'
-    elif estilo_mapa == "OpenStreetMap":
+        elif estilo_mapa == "OpenStreetMap":
         tiles_mapa = 'OpenStreetMap'
         attr_mapa = 'OpenStreetMap'
     else:
@@ -967,6 +964,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         st.markdown("### 📍 Cenário Atual")
         cy, cx = -15.7801, -47.9292
         m_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_mapa, attr=attr_mapa, prefer_canvas=True)
+        Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_br)
 
         if not df_plot.empty:
             df_bounds = df_plot[(df_plot['latitude'] >= -35) & (df_plot['latitude'] <= 6) & (df_plot['longitude'] >= -75) & (df_plot['longitude'] <= -30)]
@@ -1149,7 +1147,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         }).reset_index()
 
         m_sim_br = folium.Map(location=[cy, cx], zoom_start=4, tiles=tiles_mapa, attr=attr_mapa, prefer_canvas=True)
-        Fullscreen().add_to(m_sim_br)
+        Fullscreen(position="topleft", title="Expandir Mapa", title_cancel="Sair da Tela Cheia", force_separate_button=True).add_to(m_sim_br)
 
         if not df_sim_grouped.empty:
             # Filtra outliers geográficos para garantir o foco correto no Brasil

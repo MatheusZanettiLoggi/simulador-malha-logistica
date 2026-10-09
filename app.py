@@ -999,7 +999,12 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 tooltip_html += f"<b>Routing Code:</b> {r[col_route1]}<br>"
                 tooltip_html += f"<b>Região de Preço:</b> {r[col_region]}<br>"
                 tooltip_html += f"<b>Serviço:</b> {r[col_service1]}<br>"
-                tooltip_html += f"<b>Volume Base:</b> {r['pct_dia']:,.0f} pct/dia<br><br>"
+                
+                # Nova formatação que exibe 2 casas decimais se for menor que 1 pacote/dia
+                vdia = r['pct_dia']
+                vdia_fmt = f"{vdia:.2f}" if pd.notna(vdia) and 0 < vdia < 1 else f"{int(round(vdia, 0)) if pd.notna(vdia) else 0}"
+                tooltip_html += f"<b>Volume Base:</b> {vdia_fmt} pct/dia<br><br>"
+                
             tooltip_html += "</div>"
             
             has_dupe_text = "!" if is_dupe else ""
@@ -1013,7 +1018,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         ).reset_index().sort_values('Volume_Dia', ascending=False)
         
         df_table.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
-        df_table['Volume_Dia'] = df_table['Volume_Dia'].round(0)
+        df_table['Volume_Dia'] = df_table['Volume_Dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
         
         # 1. Mapa Ocupando a Largura Total
         st.markdown("**Localização Proporcional ao Volume**")
@@ -1048,7 +1053,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
         if 'pct_dia' in df_completa.columns:
-            df_completa['pct_dia'] = df_completa['pct_dia'].round(0).astype(int)
+            df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
             df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
         st.dataframe(df_completa, use_container_width=True, hide_index=True)
 
@@ -1172,7 +1177,12 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 tooltip_html += f"<b>Routing Code:</b> {r[col_route1]}<br>"
                 tooltip_html += f"<b>Região de Preço:</b> {r[col_region]}<br>"
                 tooltip_html += f"<b>Serviço:</b> {r[col_service1]}<br>"
-                tooltip_html += f"<b>Volume Base:</b> {r['pct_dia']:,.0f} pct/dia<br><br>"
+                
+                # Nova formatação que exibe 2 casas decimais se for menor que 1 pacote/dia
+                vdia = r['pct_dia']
+                vdia_fmt = f"{vdia:.2f}" if pd.notna(vdia) and 0 < vdia < 1 else f"{int(round(vdia, 0)) if pd.notna(vdia) else 0}"
+                tooltip_html += f"<b>Volume Base:</b> {vdia_fmt} pct/dia<br><br>"
+                
             tooltip_html += "</div>"
             
             has_dupe_text = "!" if is_dupe else ""
@@ -1186,7 +1196,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         ).reset_index().sort_values('Volume_Dia', ascending=False)
         
         df_table_sim.rename(columns={'Base_Route': 'Base LMC'}, inplace=True)
-        df_table_sim['Volume_Dia'] = df_table_sim['Volume_Dia'].round(0)
+        df_table_sim['Volume_Dia'] = df_table_sim['Volume_Dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
         
         # 1. Mapa Ocupando a Largura Total
         st.markdown("**Localização Proporcional ao Volume (Simulado)**")
@@ -1228,13 +1238,13 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         else:
             df_changed_br = df_changed_br[[col_city1 + '_Atual', col_state1 + '_Atual', col_region + '_Atual', 'Base_Route_Atual', 'Base_Route_Simulado', 'pct_dia_Atual']].copy()
             df_changed_br.columns = ['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada', 'Volume Migrado (pct/dia)']
-            df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].round(0)
+            df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
             st.dataframe(df_changed_br, use_container_width=True, hide_index=True)
             
         st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
         if 'pct_dia' in df_completa_sim.columns:
-            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].round(0).astype(int)
+            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
             df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
         st.dataframe(df_completa_sim, use_container_width=True, hide_index=True)
 
@@ -1315,7 +1325,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
                 # Puxa as colunas absolutas que acabamos de blindar na função de processamento principal
                 df_redes_out['Total de Pacotes (Período)'] = df_redes['Total_Pacotes_Bruto'] if 'Total_Pacotes_Bruto' in df_redes.columns else 0
                 df_redes_out['Dias com Entrega'] = df_redes['Total_Dias_Bruto'] if 'Total_Dias_Bruto' in df_redes.columns else 1
-                df_redes_out['Volume (pct/dia)'] = df_redes['pct_dia'].round(0).astype(int) if 'pct_dia' in df_redes.columns else 0
+                df_redes_out['Volume (pct/dia)'] = df_redes['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)) if 'pct_dia' in df_redes.columns else 0
                 
                 df_redes_out['Base Própria Mais Próxima'] = df_redes['Base Própria Mais Próxima']
                 df_redes_out['Cidade Própria Mais Próxima'] = df_redes['Cidade Própria Mais Próxima']

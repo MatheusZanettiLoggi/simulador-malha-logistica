@@ -953,7 +953,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     elif estilo_mapa == "Esri Street (Rodovias)":
         tiles_mapa = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}'
         attr_mapa = 'Esri Street Map'
-        elif estilo_mapa == "OpenStreetMap":
+    elif estilo_mapa == "OpenStreetMap":
         tiles_mapa = 'OpenStreetMap'
         attr_mapa = 'OpenStreetMap'
     else:

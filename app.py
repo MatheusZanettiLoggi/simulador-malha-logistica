@@ -858,7 +858,7 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         highlight_vol = st.number_input("Destacar > X pacotes/dia:", min_value=0, value=0, step=100, help="Municípios abaixo deste corte ficarão transparentes.")
         
     with col_f8:
-        estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", ["Escuro (Padrão)", "Google Maps (Rótulos)", "Satélite", "Claro (CartoDB)"])
+        estilo_mapa = st.selectbox("Estilo do Mapa (Fundo):", ["Escuro (Padrão)", "Google Maps (Rótulos)", "Google Maps (Relevo)", "Satélite", "Claro (CartoDB)", "OpenStreetMap"])
 
     st.markdown("---")
 
@@ -937,12 +937,18 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
     if estilo_mapa == "Google Maps (Rótulos)":
         tiles_mapa = 'https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}'
         attr_mapa = 'Google Maps'
+    elif estilo_mapa == "Google Maps (Relevo)":
+        tiles_mapa = 'https://mt1.google.com/vt/lyrs=p&x={x}&y={y}&z={z}'
+        attr_mapa = 'Google Maps Terrain'
     elif estilo_mapa == "Satélite":
         tiles_mapa = 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}'
         attr_mapa = 'Google Maps Satellite'
     elif estilo_mapa == "Claro (CartoDB)":
         tiles_mapa = 'CartoDB positron'
         attr_mapa = 'CartoDB'
+    elif estilo_mapa == "OpenStreetMap":
+        tiles_mapa = 'OpenStreetMap'
+        attr_mapa = 'OpenStreetMap'
     else:
         tiles_mapa = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}'
         attr_mapa = 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ'

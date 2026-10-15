@@ -1087,10 +1087,10 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
         
         # Força formatação limpa (sem casas decimais inúteis)
-        if col_pacotes in df_completa.columns:
-            df_completa[col_pacotes] = df_completa[col_pacotes].fillna(0).astype(int)
-        if col_dias in df_completa.columns:
-            df_completa[col_dias] = df_completa[col_dias].fillna(0).astype(int)
+        if col_pacotes_br in df_completa.columns:
+            df_completa[col_pacotes_br] = df_completa[col_pacotes_br].fillna(0).astype(int)
+        if col_dias_br in df_completa.columns:
+            df_completa[col_dias_br] = df_completa[col_dias_br].fillna(0).astype(int)
             
         if 'pct_dia' in df_completa.columns:
             df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
@@ -1286,10 +1286,10 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
         
         # Força formatação limpa (sem casas decimais inúteis)
-        if col_pacotes in df_completa_sim.columns:
-            df_completa_sim[col_pacotes] = df_completa_sim[col_pacotes].fillna(0).astype(int)
-        if col_dias in df_completa_sim.columns:
-            df_completa_sim[col_dias] = df_completa_sim[col_dias].fillna(0).astype(int)
+        if col_pacotes_br in df_completa_sim.columns:
+            df_completa_sim[col_pacotes_br] = df_completa_sim[col_pacotes_br].fillna(0).astype(int)
+        if col_dias_br in df_completa_sim.columns:
+            df_completa_sim[col_dias_br] = df_completa_sim[col_dias_br].fillna(0).astype(int)
             
         if 'pct_dia' in df_completa_sim.columns:
             df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)

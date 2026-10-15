@@ -1081,22 +1081,20 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         st.markdown("### 📊 Resumo Operacional (Atual)")
         st.dataframe(df_table.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
 
-        st.markdown("---")
         st.markdown("### 🗂️ Visão Tabular Detalhada")
         cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
-        
-        # Força formatação limpa (sem casas decimais inúteis)
-        if col_pacotes_br in df_completa.columns:
-            df_completa[col_pacotes_br] = df_completa[col_pacotes_br].fillna(0).astype(int)
-        if col_dias_br in df_completa.columns:
-            df_completa[col_dias_br] = df_completa[col_dias_br].fillna(0).astype(int)
             
         if 'pct_dia' in df_completa.columns:
             df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
             df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
             
-        st.dataframe(df_completa.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
+        # Aplica a formatação limpa (sem casas decimais) para Pacotes e Dias diretamente no Estilo Visual
+        format_dict = {}
+        if col_pacotes_br in df_completa.columns: format_dict[col_pacotes_br] = "{:.0f}"
+        if col_dias_br in df_completa.columns: format_dict[col_dias_br] = "{:.0f}"
+            
+        st.dataframe(df_completa.style.set_properties(**{'text-align': 'center'}).format(format_dict), use_container_width=True, hide_index=True)
 
     with aba_nac2:
         st.markdown("### 🔄 Cenário Simulado")
@@ -1284,18 +1282,17 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
             
         st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
-        
-        # Força formatação limpa (sem casas decimais inúteis)
-        if col_pacotes_br in df_completa_sim.columns:
-            df_completa_sim[col_pacotes_br] = df_completa_sim[col_pacotes_br].fillna(0).astype(int)
-        if col_dias_br in df_completa_sim.columns:
-            df_completa_sim[col_dias_br] = df_completa_sim[col_dias_br].fillna(0).astype(int)
             
         if 'pct_dia' in df_completa_sim.columns:
             df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
             df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
             
-        st.dataframe(df_completa_sim.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
+        # Aplica a formatação limpa (sem casas decimais) para Pacotes e Dias diretamente no Estilo Visual
+        format_dict_sim = {}
+        if col_pacotes_br in df_completa_sim.columns: format_dict_sim[col_pacotes_br] = "{:.0f}"
+        if col_dias_br in df_completa_sim.columns: format_dict_sim[col_dias_br] = "{:.0f}"
+            
+        st.dataframe(df_completa_sim.style.set_properties(**{'text-align': 'center'}).format(format_dict_sim), use_container_width=True, hide_index=True)
         
     with aba_nac3:
         st.markdown("### 🚚 Municípios em Redespacho (Oportunidades de Expansão)")

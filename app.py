@@ -1085,9 +1085,17 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         st.markdown("### 🗂️ Visão Tabular Detalhada")
         cols_to_drop = ['latitude', 'longitude', 'join_city', 'City_State', 'ID_Row', 'is_loggi', 'is_correios', col_route1, col_route2, 'UF', 'Base_Route', 'Total_Pacotes_Bruto', 'Total_Dias_Bruto']
         df_completa = df_plot.drop(columns=[c for c in cols_to_drop if c in df_plot.columns], errors='ignore').copy()
+        
+        # Força formatação limpa (sem casas decimais inúteis)
+        if col_pacotes in df_completa.columns:
+            df_completa[col_pacotes] = df_completa[col_pacotes].fillna(0).astype(int)
+        if col_dias in df_completa.columns:
+            df_completa[col_dias] = df_completa[col_dias].fillna(0).astype(int)
+            
         if 'pct_dia' in df_completa.columns:
-            df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
+            df_completa['pct_dia'] = df_completa['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
             df_completa.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
+            
         st.dataframe(df_completa.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
 
     with aba_nac2:
@@ -1271,14 +1279,22 @@ if st.session_state.modo_analise == "🗺️ Abrangência de todo o Brasil":
         else:
             df_changed_br = df_changed_br[[col_city1 + '_Atual', col_state1 + '_Atual', col_region + '_Atual', 'Base_Route_Atual', 'Base_Route_Simulado', 'pct_dia_Atual']].copy()
             df_changed_br.columns = ['Município', 'Estado', 'Região de Preço', 'Base Original', 'Base Simulada', 'Volume Migrado (pct/dia)']
-            df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
+            df_changed_br['Volume Migrado (pct/dia)'] = df_changed_br['Volume Migrado (pct/dia)'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
             st.dataframe(df_changed_br.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
             
         st.markdown("### 🗂️ Visão Tabular Detalhada (Simulado)")
         df_completa_sim = df_sim_plot.drop(columns=[c for c in cols_to_drop if c in df_sim_plot.columns], errors='ignore').copy()
+        
+        # Força formatação limpa (sem casas decimais inúteis)
+        if col_pacotes in df_completa_sim.columns:
+            df_completa_sim[col_pacotes] = df_completa_sim[col_pacotes].fillna(0).astype(int)
+        if col_dias in df_completa_sim.columns:
+            df_completa_sim[col_dias] = df_completa_sim[col_dias].fillna(0).astype(int)
+            
         if 'pct_dia' in df_completa_sim.columns:
-            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0))
+            df_completa_sim['pct_dia'] = df_completa_sim['pct_dia'].apply(lambda x: round(x, 2) if pd.notna(x) and 0 < x < 1 else (int(round(x, 0)) if pd.notna(x) else 0)).astype(object)
             df_completa_sim.rename(columns={'pct_dia': 'Volume (pct/dia)'}, inplace=True)
+            
         st.dataframe(df_completa_sim.style.set_properties(**{'text-align': 'center'}), use_container_width=True, hide_index=True)
         
     with aba_nac3:
